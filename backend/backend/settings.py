@@ -40,6 +40,7 @@ INSTALLED_APPS = [
 ]
 EXTERNAL_APPS=[
     'accounts',
+    'rag_api',
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',

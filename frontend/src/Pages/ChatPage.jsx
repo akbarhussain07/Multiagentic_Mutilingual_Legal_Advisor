@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Menu, Plus, LogOut, User, Sparkles,Scale, MessageSquare } from 'lucide-react';
+import { Send, Menu, Plus, LogOut, User, Scale, MessageSquare, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import './ChatPage.css';
+import { queryLegalQuestion, checkHealth } from './api';
 
 export default function ChatPage() {
   const [message, setMessage] = useState('');
@@ -8,31 +9,38 @@ export default function ChatPage() {
   const [activeChat, setActiveChat] = useState(1);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [messages, setMessages] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState('checking');
   const messagesEndRef = useRef(null);
-  // 1. Change 'aftab' to a state variable
   const [username, setUsername] = useState('Guest');
 
-
-// --- SECURITY CHECK HERE ---
+  // Security check and backend health check
   useEffect(() => {
     const storedName = localStorage.getItem('chatUser');
     const token = localStorage.getItem('authToken');
 
-    // If NO name is found in storage, redirect to Login
     if (!token) {
       window.location.href = '/login';
     } else {
-      // If name IS found, let them stay and set the name
       setUsername(storedName || 'User');
+      // Check backend health after login verification
+      checkBackendHealth();
     }
-  }, []); // Empty array means this runs once when page loads
+  }, []);
 
-
-  // 3. Update Logout to clear the name
-  const handleLogout = () => {
-    localStorage.removeItem('authToken'); // Delete token
-    localStorage.removeItem('chatUser'); // Delete the name
-    window.location.href = '/login';     // Go back to login
+  // Check backend health status
+  const checkBackendHealth = async () => {
+    try {
+      const health = await checkHealth();
+      if (health.status === 'healthy' && health.neo4j_connected && health.documents_loaded) {
+        setBackendStatus('connected');
+      } else {
+        setBackendStatus('disconnected');
+      }
+    } catch (error) {
+      console.error('Backend health check failed:', error);
+      setBackendStatus('disconnected');
+    }
   };
 
   const scrollToBottom = () => {
@@ -43,44 +51,67 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages]);
 
-  const handleSendMessage = () => {
-    if (message.trim()) {
-      const userMessage = {
-        id: Date.now(),
-        type: 'user',
-        content: message,
+  const handleSendMessage = async () => {
+    if (!message.trim() || isLoading || backendStatus !== 'connected') return;
+
+    const userMessage = {
+      id: Date.now(),
+      type: 'user',
+      content: message,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    const questionText = message;
+    setMessage('');
+    setIsLoading(true);
+
+    try {
+      // Call the Django backend API
+      const response = await queryLegalQuestion(questionText);
+      
+      const botMessage = {
+        id: Date.now() + 1,
+        type: 'bot',
+        content: response.answer || 'I apologize, but I could not generate a response.',
+        sources: response.sources || [],
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
-
-      const newMessages = [...messages, userMessage];
-      setMessages(newMessages);
-
-      // Simulate bot response
-      setTimeout(() => {
-        const botMessage = {
-          id: Date.now() + 1,
-          type: 'bot',
-          content: 'This is a demo response. Connect your backend to get real answers about Pakistani Constitution.',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages(prev => [...prev, botMessage]);
-
-        // Update chat title if it's the first message
-        if (newMessages.length === 1) {
-          setChats(prev => prev.map(chat =>
-            chat.id === activeChat
-              ? { ...chat, name: message.slice(0, 30) + (message.length > 30 ? '...' : ''), messages: [...newMessages, botMessage] }
-              : chat
-          ));
-        }
-      }, 500);
-
-      setMessage('');
+      
+      setMessages(prev => [...prev, botMessage]);
+      
+      // Update chat title with first message
+      if (newMessages.length === 1) {
+        setChats(prev => prev.map(chat =>
+          chat.id === activeChat
+            ? { ...chat, name: questionText.slice(0, 30) + (questionText.length > 30 ? '...' : ''), messages: [...newMessages, botMessage] }
+            : chat
+        ));
+      } else {
+        // Update existing chat messages
+        setChats(prev => prev.map(chat =>
+          chat.id === activeChat
+            ? { ...chat, messages: [...newMessages, botMessage] }
+            : chat
+        ));
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      const errorMessage = {
+        id: Date.now() + 1,
+        type: 'bot',
+        content: 'I apologize, but I encountered an error connecting to the backend. Please ensure the Django server is running on http://localhost:8000.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
       e.preventDefault();
       handleSendMessage();
     }
@@ -97,6 +128,12 @@ export default function ChatPage() {
     setActiveChat(id);
     const chat = chats.find(c => c.id === id);
     setMessages(chat ? chat.messages : []);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('chatUser');
+    window.location.href = '/login';
   };
 
   return (
@@ -144,9 +181,34 @@ export default function ChatPage() {
           <button className="menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
             <Menu size={24} />
           </button>
-          <h1 className="app-title"> <div className="bot-avatar">
-                      <Scale size={18} color="white" />
-                    </div>Legal Advisor</h1>
+          <h1 className="app-title">
+            <div className="bot-avatar">
+              <Scale size={18} color="white" />
+            </div>
+            Legal Advisor
+          </h1>
+          
+          {/* Backend Status Indicator */}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {backendStatus === 'connected' && (
+              <>
+                <CheckCircle size={16} color="#10b981" />
+                <span style={{ fontSize: '14px', color: '#10b981' }}>Connected</span>
+              </>
+            )}
+            {backendStatus === 'disconnected' && (
+              <>
+                <AlertCircle size={16} color="#ef4444" />
+                <span style={{ fontSize: '14px', color: '#ef4444' }}>Offline</span>
+              </>
+            )}
+            {backendStatus === 'checking' && (
+              <>
+                <Loader2 size={16} color="#f59e0b" className="spinner" />
+                <span style={{ fontSize: '14px', color: '#f59e0b' }}>Connecting...</span>
+              </>
+            )}
+          </div>
         </header>
 
         {/* Chat Area */}
@@ -173,6 +235,22 @@ export default function ChatPage() {
                   )}
                   <div className={`message-bubble ${msg.type}`}>
                     <p className="message-text">{msg.content}</p>
+                    {msg.sources && msg.sources.length > 0 && (
+                      <div style={{ 
+                        marginTop: '12px', 
+                        paddingTop: '12px', 
+                        borderTop: '1px solid #e0e0e0',
+                        fontSize: '12px',
+                        color: '#666'
+                      }}>
+                        <strong>Sources:</strong>
+                        {msg.sources.map((source, idx) => (
+                          <div key={idx} style={{ marginTop: '4px', paddingLeft: '8px' }}>
+                            • {source.content}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <span className={`message-time ${msg.type}`}>
                       {msg.timestamp}
                     </span>
@@ -184,6 +262,22 @@ export default function ChatPage() {
                   )}
                 </div>
               ))}
+              
+              {/* Loading indicator */}
+              {isLoading && (
+                <div className="message-wrapper bot">
+                  <div className="bot-avatar">
+                    <Scale size={20} color="white" />
+                  </div>
+                  <div className="message-bubble bot">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Loader2 size={16} className="spinner" />
+                      <span>Thinking...</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               <div ref={messagesEndRef} />
             </div>
           )}
@@ -200,18 +294,21 @@ export default function ChatPage() {
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
+                disabled={isLoading || backendStatus !== 'connected'}
               />
               <button
-                className={`send-btn ${message.trim() ? 'active' : ''}`}
+                className={`send-btn ${message.trim() && !isLoading && backendStatus === 'connected' ? 'active' : ''}`}
                 onClick={handleSendMessage}
-                disabled={!message.trim()}
+                disabled={!message.trim() || isLoading || backendStatus !== 'connected'}
               >
-                <Send size={20} />
+                {isLoading ? <Loader2 size={20} className="spinner" /> : <Send size={20} />}
               </button>
             </div>
-            <p className="server-status">
-              Backend server is offline. Please start Django server on http://localhost:8000
-            </p>
+            {backendStatus === 'disconnected' && (
+              <p className="server-status">
+                Backend server is offline. Please start Django server on http://localhost:8000
+              </p>
+            )}
           </div>
         </footer>
       </main>
