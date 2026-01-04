@@ -347,3 +347,74 @@
   margin-top: 8px;
   text-align: center;
 }
+
+
+
+
+/* Wrapper for the chat item to handle layout */
+.chat-item-wrapper {
+  display: flex;
+  align-items: center;
+  width: 95%;
+  padding: 10px 6px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+  color: #d1d5db; /* Gray-300 */
+}
+
+.chat-item-wrapper:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.chat-item-wrapper.active {
+  background-color: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+/* The main clickable area (text and icon) */
+.chat-item-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1; /* Takes up all available space */
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  overflow: hidden; /* Prevents text overflow */
+}
+
+.chat-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9rem;
+}
+
+/* The Delete Button */
+.delete-chat-btn {
+  background: none;
+  border: none;
+  color: #9ca3af; /* Gray-400 */
+  padding: 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0; /* Hidden by default */
+  transition: all 0.2s;
+}
+
+/* Show delete button only when hovering over the chat item */
+.chat-item-wrapper:hover .delete-chat-btn {
+  opacity: 1;
+}
+
+.delete-chat-btn:hover {
+  color: #ef4444; /* Red-500 */
+  background-color: rgba(239, 68, 68, 0.1);
+}

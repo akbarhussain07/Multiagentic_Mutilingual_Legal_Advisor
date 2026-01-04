@@ -1,20 +1,28 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Menu, Plus, LogOut, User, Scale, MessageSquare, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
+import { Send, Menu, Plus, LogOut, User, Scale, MessageSquare, Loader2, AlertCircle, CheckCircle, Trash2 } from 'lucide-react';
 import './ChatPage.css';
-import { queryLegalQuestion, checkHealth } from './api';
+import { queryLegalQuestion, checkHealth, getUserSessions, getSessionMessages, deleteChatSession } from './api';
 
 export default function ChatPage() {
   const [message, setMessage] = useState('');
-  const [chats, setChats] = useState([{ id: 1, name: 'New Chat', messages: [] }]);
-  const [activeChat, setActiveChat] = useState(1);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  
+  // 'chats' now only stores the Sidebar list (id, title)
+  const [chats, setChats] = useState([]); 
+  
+  // 'activeChat' stores the UUID of the current session, or 'new'
+  const [activeChat, setActiveChat] = useState('new'); 
+  
+  // 'messages' stores the content of the CURRENT active chat
   const [messages, setMessages] = useState([]);
+  
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false); // For sidebar loading
   const [backendStatus, setBackendStatus] = useState('checking');
   const messagesEndRef = useRef(null);
   const [username, setUsername] = useState('Guest');
 
-  // Security check and backend health check
+  // 1. Initial Setup: Check Auth, Health, and Load Sidebar History
   useEffect(() => {
     const storedName = localStorage.getItem('chatUser');
     const token = localStorage.getItem('authToken');
@@ -23,16 +31,55 @@ export default function ChatPage() {
       window.location.href = '/login';
     } else {
       setUsername(storedName || 'User');
-      // Check backend health after login verification
       checkBackendHealth();
+      loadSidebarHistory();
     }
   }, []);
 
-  // Check backend health status
+  // 2. Load Messages when Active Chat Changes
+  useEffect(() => {
+    if (activeChat === 'new') {
+      setMessages([]);
+    } else {
+      loadChatMessages(activeChat);
+    }
+  }, [activeChat]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isLoading]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  // --- API Interaction Functions ---
+  const handleDeleteChat = async (e, sessionId) => {
+    e.stopPropagation(); // Prevents the chat from opening when you click delete
+    
+    if (!window.confirm("Are you sure you want to delete this chat?")) return;
+
+    try {
+      await deleteChatSession(sessionId);
+      
+      setChats(prev => prev.filter(chat => chat.id !== sessionId));
+
+      // If we deleted the currently active chat, switch to New Chat
+      if (activeChat === sessionId) {
+        handleNewChat();
+      }
+    } catch (error) {
+      console.error("Failed to delete chat:", error);
+      alert("Could not delete chat. Please try again.");
+    }
+  };
+
+
   const checkBackendHealth = async () => {
     try {
       const health = await checkHealth();
-      if (health.status === 'healthy' && health.neo4j_connected && health.documents_loaded) {
+      if (health.status === 'healthy' && health.neo4j_connected) {
         setBackendStatus('connected');
       } else {
         setBackendStatus('disconnected');
@@ -43,66 +90,85 @@ export default function ChatPage() {
     }
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const loadSidebarHistory = async () => {
+    setIsHistoryLoading(true);
+    try {
+      const sessions = await getUserSessions();
+      setChats(sessions); // Expecting array of { id, name, updated_at }
+    } catch (error) {
+      console.error("Failed to load history:", error);
+    } finally {
+      setIsHistoryLoading(false);
+    }
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+  const loadChatMessages = async (sessionId) => {
+    setIsLoading(true); // Reuse loading state or create a specific one for fetching
+    try {
+      const msgs = await getSessionMessages(sessionId);
+      // Backend returns: { type: 'user'|'bot', content: '...', timestamp: '...' }
+      // We need to add local IDs for React keys if the backend doesn't provide unique IDs for rendering
+      const formattedMsgs = msgs.map((msg, index) => ({
+        ...msg,
+        id: index // Simple index for display key, ideally backend sends UUID
+      }));
+      setMessages(formattedMsgs);
+    } catch (error) {
+      console.error("Failed to load messages:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSendMessage = async () => {
     if (!message.trim() || isLoading || backendStatus !== 'connected') return;
 
-    const userMessage = {
+    const currentQuestion = message;
+    setMessage('');
+    
+    // Optimistic UI Update: Show user message immediately
+    const tempUserMsg = {
       id: Date.now(),
       type: 'user',
-      content: message,
+      content: currentQuestion,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
-    const questionText = message;
-    setMessage('');
+    setMessages(prev => [...prev, tempUserMsg]);
     setIsLoading(true);
 
     try {
-      // Call the Django backend API
-      const response = await queryLegalQuestion(questionText);
+      // Determine Session ID (null if new, uuid if existing)
+      const sessionIdToSend = activeChat === 'new' ? null : activeChat;
+
+      // Call Backend
+      const response = await queryLegalQuestion(currentQuestion, sessionIdToSend);
       
       const botMessage = {
         id: Date.now() + 1,
         type: 'bot',
-        content: response.answer || 'I apologize, but I could not generate a response.',
+        content: response.answer || 'No response generated.',
         sources: response.sources || [],
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       
       setMessages(prev => [...prev, botMessage]);
-      
-      // Update chat title with first message
-      if (newMessages.length === 1) {
-        setChats(prev => prev.map(chat =>
-          chat.id === activeChat
-            ? { ...chat, name: questionText.slice(0, 30) + (questionText.length > 30 ? '...' : ''), messages: [...newMessages, botMessage] }
-            : chat
-        ));
-      } else {
-        // Update existing chat messages
-        setChats(prev => prev.map(chat =>
-          chat.id === activeChat
-            ? { ...chat, messages: [...newMessages, botMessage] }
-            : chat
-        ));
+
+      // CRITICAL: If we started a NEW chat, the backend created a session. 
+      // We must switch to that ID and refresh the sidebar.
+      if (activeChat === 'new' && response.session_id) {
+        setActiveChat(response.session_id); // This will NOT trigger re-fetch due to logic check? Actually it might.
+        // To prevent re-fetching messages we just displayed, we could optimize, 
+        // but for now, let's just refresh the sidebar title.
+        loadSidebarHistory(); 
       }
+
     } catch (error) {
       console.error('Error sending message:', error);
       const errorMessage = {
-        id: Date.now() + 1,
+        id: Date.now() + 2,
         type: 'bot',
-        content: 'I apologize, but I encountered an error connecting to the backend. Please ensure the Django server is running on http://localhost:8000.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        content: 'Error: Could not connect to the Legal Advisor backend.',
+        timestamp: new Date().toLocaleTimeString()
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -118,16 +184,8 @@ export default function ChatPage() {
   };
 
   const handleNewChat = () => {
-    const newId = Date.now();
-    setChats([...chats, { id: newId, name: 'New Chat', messages: [] }]);
-    setActiveChat(newId);
+    setActiveChat('new');
     setMessages([]);
-  };
-
-  const switchChat = (id) => {
-    setActiveChat(id);
-    const chat = chats.find(c => c.id === id);
-    setMessages(chat ? chat.messages : []);
   };
 
   const handleLogout = () => {
@@ -148,16 +206,33 @@ export default function ChatPage() {
         </div>
 
         <div className="chat-list">
-          {chats.map((chat) => (
-            <button
-              key={chat.id}
-              className={`chat-item ${activeChat === chat.id ? 'active' : ''}`}
-              onClick={() => switchChat(chat.id)}
-            >
-              <MessageSquare size={16} />
-              <span className="chat-title">{chat.name}</span>
-            </button>
-          ))}
+          {isHistoryLoading ? (
+             <div style={{padding: '20px', textAlign: 'center', color: '#666'}}>
+               <Loader2 size={20} className="spinner" />
+             </div>
+          ) : (
+            chats.map((chat) => (
+              <div 
+                key={chat.id} 
+                className={`chat-item-wrapper ${activeChat === chat.id ? 'active' : ''}`}
+                onClick={() => setActiveChat(chat.id)}
+              >
+                <button className="chat-item-content">
+                  <MessageSquare size={16} />
+                  <span className="chat-title">{chat.name || 'Untitled Chat'}</span>
+                </button>
+                
+                {/* 4. The Delete Button */}
+                <button 
+                  className="delete-chat-btn"
+                  onClick={(e) => handleDeleteChat(e, chat.id)}
+                  title="Delete Chat"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))
+          )}
         </div>
 
         <div className="sidebar-footer">
@@ -188,21 +263,18 @@ export default function ChatPage() {
             Legal Advisor
           </h1>
           
-          {/* Backend Status Indicator */}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {backendStatus === 'connected' && (
+            {backendStatus === 'connected' ? (
               <>
                 <CheckCircle size={16} color="#10b981" />
                 <span style={{ fontSize: '14px', color: '#10b981' }}>Connected</span>
               </>
-            )}
-            {backendStatus === 'disconnected' && (
+            ) : backendStatus === 'disconnected' ? (
               <>
                 <AlertCircle size={16} color="#ef4444" />
                 <span style={{ fontSize: '14px', color: '#ef4444' }}>Offline</span>
               </>
-            )}
-            {backendStatus === 'checking' && (
+            ) : (
               <>
                 <Loader2 size={16} color="#f59e0b" className="spinner" />
                 <span style={{ fontSize: '14px', color: '#f59e0b' }}>Connecting...</span>
@@ -213,21 +285,21 @@ export default function ChatPage() {
 
         {/* Chat Area */}
         <section className="chat-area">
-          {messages.length === 0 ? (
+          {messages.length === 0 && activeChat === 'new' ? (
             <div className="empty-state">
               <div className="empty-icon">
                 <Scale size={40} color="white" />
               </div>
               <h2 className="welcome-title">How can I help you today?</h2>
               <p className="welcome-subtitle">
-                Ask me anything about the Pakistani Constitution. I'll provide accurate
+                Ask me anything about the Pakistani or Islamic Laws. I will provide accurate
                 answers based on official documents.
               </p>
             </div>
           ) : (
             <div className="messages-container">
-              {messages.map((msg) => (
-                <div key={msg.id} className={`message-wrapper ${msg.type}`}>
+              {messages.map((msg, idx) => (
+                <div key={idx} className={`message-wrapper ${msg.type}`}>
                   {msg.type === 'bot' && (
                     <div className="bot-avatar">
                       <Scale size={20} color="white" />
@@ -235,22 +307,19 @@ export default function ChatPage() {
                   )}
                   <div className={`message-bubble ${msg.type}`}>
                     <p className="message-text">{msg.content}</p>
+                    
+                    {/* Render Sources if available */}
                     {msg.sources && msg.sources.length > 0 && (
-                      <div style={{ 
-                        marginTop: '12px', 
-                        paddingTop: '12px', 
-                        borderTop: '1px solid #e0e0e0',
-                        fontSize: '12px',
-                        color: '#666'
-                      }}>
+                      <div className="message-sources">
                         <strong>Sources:</strong>
-                        {msg.sources.map((source, idx) => (
-                          <div key={idx} style={{ marginTop: '4px', paddingLeft: '8px' }}>
-                            • {source.content}
+                        {msg.sources.map((source, sIdx) => (
+                          <div key={sIdx} className="source-item">
+                            • {source.content || source}
                           </div>
                         ))}
                       </div>
                     )}
+                    
                     <span className={`message-time ${msg.type}`}>
                       {msg.timestamp}
                     </span>
@@ -263,7 +332,6 @@ export default function ChatPage() {
                 </div>
               ))}
               
-              {/* Loading indicator */}
               {isLoading && (
                 <div className="message-wrapper bot">
                   <div className="bot-avatar">
@@ -272,7 +340,7 @@ export default function ChatPage() {
                   <div className="message-bubble bot">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <Loader2 size={16} className="spinner" />
-                      <span>Thinking...</span>
+                      <span>Analyzing legal documents...</span>
                     </div>
                   </div>
                 </div>
