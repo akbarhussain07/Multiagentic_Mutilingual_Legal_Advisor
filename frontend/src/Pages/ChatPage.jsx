@@ -292,7 +292,7 @@ export default function ChatPage() {
               </div>
               <h2 className="welcome-title">How can I help you today?</h2>
               <p className="welcome-subtitle">
-                Ask me anything about the Pakistani or Islamic Laws. I will provide accurate
+                Ask me anything about the Pakistani Laws. I will provide accurate
                 answers based on official documents.
               </p>
             </div>

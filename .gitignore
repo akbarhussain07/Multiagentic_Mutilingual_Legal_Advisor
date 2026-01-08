@@ -8,6 +8,6 @@ legalenv/
 backend/__pycache__/
 backend/db.sqlite3
 *.pyc
-
+backend/.env
 # System Files
 .DS_Store
