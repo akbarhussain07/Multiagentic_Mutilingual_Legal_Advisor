@@ -1,4 +1,13 @@
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from django.shortcuts import get_object_or_404
+from .models import ChatSession, ChatMessage
+from rest_framework import status
+from .rag_service import RAGService
+import logging
+
 # from rest_framework.response import Response
 # from rest_framework import status
 # from .rag_service import RAGService
@@ -60,7 +69,8 @@ from rest_framework.decorators import api_view
 
 
 
-
+logger = logging.getLogger(__name__)
+rag_service = RAGService()
 
 
 @api_view(['POST'])
@@ -134,20 +144,8 @@ def health_check(request):
 
 
 
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
-from django.shortcuts import get_object_or_404
-from .models import ChatSession, ChatMessage
-from rest_framework import status
-from .rag_service import RAGService
-import logging
 
-logger = logging.getLogger(__name__)
-rag_service = RAGService()
-
-# --- 1. Query RAG (Modified to Save History) ---
+#  Query RAG (Modified to Save History) 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated]) # Ensures only logged-in users can save chats
 def query_rag(request):
@@ -174,12 +172,13 @@ def query_rag(request):
             role='user',
             content=question
         )
+           
 
         # Step C: Get AI Response
         result = rag_service.query(question)
         answer = result.get('answer', 'No answer found.')
         sources = result.get('sources', [])
-
+        # print(sources)
         # Step D: Save AI Message to DB
         ChatMessage.objects.create(
             session=session,
@@ -199,7 +198,7 @@ def query_rag(request):
         logger.error(f"Error in query_rag: {str(e)}")
         return Response({'error': str(e)}, status=500)
 
-# --- 2. Get User's Chat History (For Sidebar) ---
+# Get User's Chat History (For Sidebar) 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_user_sessions(request):
@@ -217,7 +216,7 @@ def get_user_sessions(request):
     except Exception as e:
         return Response({'error': str(e)}, status=500)
 
-# --- 3. Get Messages for a Specific Session (For Loading Chat) ---
+# Get Messages for a Specific Session (For Loading Chat) 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_session_messages(request, session_id):

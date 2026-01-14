@@ -3,11 +3,11 @@ import { Bot, User, Scale } from 'lucide-react';
 import './ChatDemo.css';
 
 const conversation = [
-  { type: 'user', text: "What's your return policy?", time: "10:23 AM" },
-  { type: 'bot', text: "Our return policy allows you to return items within 30 days of purchase. Items must be in original condition with tags attached. Would you like me to guide you through the return process?", time: "10:23 AM" },
-  { type: 'user', text: "Yes, please. I bought a jacket last week.", time: "10:24 AM" },
-  { type: 'bot', text: "Great! Since your purchase is within 30 days, you're eligible for a return. Here's what you need to do:\n\n1. Visit our returns portal\n2. Enter your order number\n3. Select the jacket from your order\n4. Print the prepaid shipping label\n\nWould you like me to send you the direct link to start the process?", time: "10:24 AM" },
-  { type: 'user', text: "That would be perfect, thanks!", time: "10:25 AM" }
+  { type: 'user', text: "How is inheritance distributed if a father passes away leaving a wife and two sons?", time: "10:23 AM" },
+  { type: 'bot', text: "According to Islamic Inheritance Law (Sharia), the distribution would generally be:\n\n1. The Wife receives 1/8th of the estate (due to the presence of children).\n2. The remaining 7/8ths is distributed among the sons.\n\nWould you like me to cite the specific references from the Quran or Pakistani Succession laws?", time: "10:23 AM" },
+  { type: 'user', text: "Yes, please referencing Pakistani law.", time: "10:24 AM" },
+  { type: 'bot', text: "Under the Muslim Family Laws Ordinance, 1961, these shares are legally recognized. You would need to file for a 'Succession Certificate' in civil court to transfer assets. I can guide you through the documentation required for this certificate if you like.", time: "10:24 AM" },
+  { type: 'user', text: "That would be helpful, thanks!", time: "10:25 AM" }
 ];
 
 export const ChatDemo = () => {

@@ -27,12 +27,14 @@ export const Hero = () => {
           </p>
 
           <div style={{ display: 'flex', gap: '1rem', marginBottom: '3rem' }}>
-            <button className="btn btn-primary">
+            <a href="#how-it-works"><button className="btn btn-primary">
               Try Demo <ArrowRight size={16} />
             </button>
-            <button className="btn btn-outline">
+            </a>
+            <a href="/signup"> <button className="btn btn-outline"  >
               Register Now
             </button>
+            </a>
           </div>
 
           <div className="hero-stats">
@@ -72,7 +74,7 @@ export const Hero = () => {
             {/* Chat Messages */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div className="bubble bubble--user">
-                How do I reset my password?
+                How do I file for Khula?
               </div>
               
               <div style={{ display: 'flex', gap: '0.75rem' }}>
@@ -80,13 +82,13 @@ export const Hero = () => {
                   <Scale size={14} color="white" />
                 </div>
                 <div className="bubble bubble--ai">
-                  I can help you with that! Click on "Forgot Password" on the login page, 
-                  and we'll email you a reset link.
+                  Under Pakistani law, you can file for Khula in Family Court. 
+                  You may have to return the Haq Mehr you received.
                 </div>
               </div>
 
               <div className="bubble bubble--user">
-                Perfect, thank you!
+                That helps, thanks!
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#22d3ee', fontSize: '0.75rem' }}>

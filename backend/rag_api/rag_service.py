@@ -36,6 +36,8 @@ class RAGService:
             self.embeddings = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/all-mpnet-base-v2"
             )
+            # To this (384 model):
+            # self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             
             # Neo4j connection details
             self.url = os.getenv("NEO4J_URL")
@@ -63,16 +65,16 @@ class RAGService:
             # Initialize retriever
             self.retriever = self.vector_store.as_retriever(
                 search_type="similarity",
-                search_kwargs={"k": 4}  # Retrieve top 4 most similar documents
+                search_kwargs={"k": 5}  # Retrieve top 5 most similar documents
             )
-            logger.info("Retriever initialized with k=4")
+            logger.info("Retriever initialized with k=5")
             
             # Initialize LLM with explicit parameters (not in model_kwargs)
             # hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
             # if not hf_token:
             #     raise ValueError("HuggingFace API token not found in environment variables")
             
-            # logger.info("Initializing HuggingFace LLM...")
+            # logger.info("Initialiing HuggingFace LLM...")
             # llm = HuggingFaceEndpoint(
             #     repo_id="HuggingFaceH4/zephyr-7b-beta",
             #     task="text-generation",
@@ -98,23 +100,29 @@ class RAGService:
             )
             # Initialize prompt template
             self.prompt = PromptTemplate(
-                template="""
-                   You are a precise and reliable legal assistant specializing in Pakistani constitutional law.
+               template="""
+                          You are a precise and reliable legal assistant specializing in Pakistani and Islamic laws.
 
-                   Your job is to answer the question **only using the information provided in the context below**.
-                   - Do NOT use prior knowledge or external information.
-                   - If the context is missing, incomplete, unrelated, or does not contain enough details to answer confidently, reply strictly with:
-                   "I don't have enough information in the provided context to answer this question accurately."
-                   - Do not attempt to infer, assume, or guess anything not explicitly supported by the context.
-                     - Provide clear, concise answers with specific references to articles or clauses when applicable.
+                          Follow these rules strictly in order:
 
-                    Context:{context}
+                          1. **Greetings:** If the user input is a simple greeting (e.g., "Hi", "Hello", "Salam", "Hey"), ignore the context and reply politely: "Hello! How can I assist you with Pakistani or Islamic law today?"
 
-                    Question:{question}
+                          2. **Language Restriction:** If the user's question is NOT in English, ignore the context and reply strictly:   "Please enter your query in English."
+                 
+                          3. **Legal Questions:** For all other inquiries, answer the question **only using the information provided in the context below**.
+                             - Do NOT use prior knowledge or external information.
+                             - If the context is missing, incomplete, unrelated, or does not contain enough details to answer confidently, reply strictly with: "I don't have enough information in the provided context to answer this question accurately."
+                             - Provide clear, concise answers with specific references to articles or clauses when applicable.
 
-                   Answer:""",
-                input_variables=['context', 'question']
+                    Context: {context}
+
+                    Question: {question}
+
+                    Answer:""",
+               input_variables=['context', 'question']
             )
+
+          
             
             self._initialized = True
             logger.info("RAG Service initialized successfully!")
@@ -123,54 +131,65 @@ class RAGService:
             logger.error(f"Error initializing RAG Service: {str(e)}")
             raise
     
+   
     def query(self, question: str) -> dict:
-        """
-        Query the RAG system with a question
-        
-        The process:
-        1. Convert question to embedding
-        2. Search Neo4j for similar document embeddings
-        3. Retrieve top-k most similar documents
-        4. Use retrieved context to generate answer with LLM
-        
-        Args:
-            question: The user's question
-            
-        Returns:
-            dict with 'answer', 'sources', and 'success' keys
-        """
         try:
             logger.info(f"Processing query: {question}")
             
-            # Step 1 & 2: Retrieve relevant documents using embeddings
-            # This automatically converts question to embedding and searches
-            retrieval_docs = self.retriever.invoke(question)
-            logger.info(f"Retrieved {len(retrieval_docs)} relevant documents")
+            # Step 1: Retrieve MANY documents (Top 25)
+            # We fetch more because the top 10 might be just Table of Contents
+            all_docs = self.retriever.invoke(question)
             
-            # Step 3: Combine retrieved documents into context
-            context_text = "\n\n".join(doc.page_content for doc in retrieval_docs)
+            # --- NEW FILTERING LOGIC STARTS HERE ---
+            useful_docs = []
+            for doc in all_docs:
+                content = doc.page_content
+                
+                # Filter 1: Skip if it explicitly says "CONTENTS" (Case insensitive)
+                if "CONTENTS" in content.upper():
+                    continue
+
+                # Filter 2: Skip if it looks like a list of sections (e.g., "301. ... 302. ...")
+                # We count how many times a pattern like "123. " appears. 
+                # If it appears more than 3 times, it's likely an index page.
+                import re
+                section_matches = len(re.findall(r'\d+\.\s', content))
+                if section_matches > 3:
+                    continue
+
+                # If it passed the checks, keep it
+                useful_docs.append(doc)
+
+            # Step 3: Take the top 5 BEST docs from the filtered list
+            # If we filtered everything out (rare), fall back to the original top 3.
+            final_docs = useful_docs[:5] if useful_docs else all_docs[:3]
             
-            # Step 4: Generate prompt with context
+            logger.info(f"Retrieved {len(all_docs)} docs, filtered down to {len(final_docs)} useful docs")
+            # ---------------------------------------
+
+            # Step 4: Combine context
+            context_text = "\n\n".join(doc.page_content for doc in final_docs)
+            
+            # Step 5: Generate prompt
             final_prompt = self.prompt.invoke({
                 "context": context_text,
                 "question": question
             })
             
-            # Step 5: Get response from LLM
+            # Step 6: Get response from LLM
             logger.info("Generating response from LLM...")
             response = self.model.invoke(final_prompt)
             
-            # Extract sources for transparency
+            # Extract sources (Only from the docs we actually used)
             sources = [
                 {
                     "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
                     "metadata": doc.metadata,
                     "page": doc.metadata.get('page', 'N/A')
                 }
-                for doc in retrieval_docs
+                for doc in final_docs
             ]
             
-            logger.info("Query processed successfully")
             return {
                 "answer": response.content,
                 "sources": sources,
@@ -181,7 +200,7 @@ class RAGService:
         except Exception as e:
             logger.error(f"Error processing query: {str(e)}")
             return {
-                "answer": f"An error occurred while processing your question: {str(e)}",
+                "answer": f"An error occurred: {str(e)}",
                 "sources": [],
                 "success": False,
                 "error": str(e)

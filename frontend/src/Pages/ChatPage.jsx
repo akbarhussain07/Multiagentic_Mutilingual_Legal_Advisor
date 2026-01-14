@@ -292,7 +292,7 @@ export default function ChatPage() {
               </div>
               <h2 className="welcome-title">How can I help you today?</h2>
               <p className="welcome-subtitle">
-                Ask me anything about the Pakistani Laws. I will provide accurate
+                Ask me anything about the Pakistani and Islamic Laws. I will provide accurate
                 answers based on official documents.
               </p>
             </div>
@@ -372,11 +372,11 @@ export default function ChatPage() {
                 {isLoading ? <Loader2 size={20} className="spinner" /> : <Send size={20} />}
               </button>
             </div>
-            {backendStatus === 'disconnected' && (
+            {/* {backendStatus === 'disconnected' && (
               <p className="server-status">
                 Backend server is offline. Please start Django server on http://localhost:8000
               </p>
-            )}
+            )} */}
           </div>
         </footer>
       </main>

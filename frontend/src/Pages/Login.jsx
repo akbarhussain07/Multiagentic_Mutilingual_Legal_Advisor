@@ -28,7 +28,7 @@ const handleSubmit = async (e) => {
       const data = await response.json();
 
       if (data.success) {
-        // --- SUCCESS: REDIRECT HERE ---
+        // SUCCESS: REDIRECT HERE 
         // 1. SAVE THE NAME TO STORAGE
         localStorage.setItem('authToken', data.token);
         localStorage.setItem('chatUser', data.user.name); 
