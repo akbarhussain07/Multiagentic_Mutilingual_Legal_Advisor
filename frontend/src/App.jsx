@@ -5,6 +5,7 @@ import Login from './Pages/Login'
 import Signup from './Pages/Signup'
 import ForgotPassword from './Pages/ForgotPassword'
 import ChatPage from './Pages/ChatPage'
+import ResetPassword from './Pages/ResetPassword'
 
 function App() {
 
@@ -16,6 +17,7 @@ function App() {
         <Route path='/login' element={<Login />}/>
         <Route path='/signup' element={<Signup />}/>
         <Route path='/forgot-password' element={<ForgotPassword />}/>
+        <Route path="/reset-password/:uid/:token" element={<ResetPassword />} />
         <Route path='/chatpage' element={<ChatPage />}/>
       </Routes>
       

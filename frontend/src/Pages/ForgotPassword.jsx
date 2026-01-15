@@ -1,14 +1,40 @@
 import React, { useState } from 'react';
-import { Scale, Mail, ArrowLeft } from 'lucide-react';
+import { Scale, Mail, ArrowLeft, AlertCircle } from 'lucide-react';
 import './Auth.css';
 
 const ForgotPassword = () => {
+  const [email, setEmail] = useState('');
   const [emailSent, setEmailSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    setEmailSent(true);
-    // Add your forgot password logic here
+    setLoading(true);
+    setError('');
+
+
+  try {
+    const response = await fetch('http://localhost:8000/accounts/password-reset/', { // Matches new URL
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      setEmailSent(true);
+    } else {
+    // If backend sends { "error": "This email account does not exist" }
+    // We set that as the error message to display in the red box
+      setError(data.error || "Failed to connect to the server.");
+    }
+  } catch (err) {
+      setError("Failed to connect to the server.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -22,28 +48,17 @@ const ForgotPassword = () => {
         </div>
 
         <a href="/login" className="back-button">
-          <ArrowLeft size={14} />
-          Back to Login
+          <ArrowLeft size={14} /> Back to Login
         </a>
 
         <h2 className="auth-title">Reset Password</h2>
-        <p className="auth-subtitle">
-          Enter your email and we'll send you a reset link
-        </p>
+        <p className="auth-subtitle">Enter your email and we'll send you a reset link</p>
 
         {emailSent ? (
-          <>
-            <div className="success-message">
-              <div className="success-title">Check Your Email</div>
-              <p className="success-text">
-                We've sent a password reset link to your email address. 
-                Please check your inbox and follow the instructions.
-              </p>
-            </div>
-            <a href="/login" className="auth-button secondary-button">
-              Return to Login
-            </a>
-          </>
+          <div className="success-message">
+             <div className="success-title">Check Your Email</div>
+             <p className="success-text">We've sent a password reset link to <strong>{email}</strong>.</p>
+          </div>
         ) : (
           <div className="auth-form">
             <div className="form-group">
@@ -52,14 +67,23 @@ const ForgotPassword = () => {
                 <Mail size={16} className="input-icon" />
                 <input
                   type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
                   className="form-input"
+                  required
                 />
               </div>
             </div>
 
-            <button onClick={handleSubmit} className="auth-button">
-              Send Reset Link
+            {error && (
+              <div className="error-message" style={{color: 'red', marginTop: '10px', display: 'flex', alignItems: 'center', gap: '5px'}}>
+                 <AlertCircle size={16}/> {error}
+              </div>
+            )}
+
+            <button onClick={handleSubmit} className="auth-button" disabled={loading}>
+              {loading ? 'Sending...' : 'Send Reset Link'}
             </button>
           </div>
         )}

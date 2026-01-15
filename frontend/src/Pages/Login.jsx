@@ -1,20 +1,23 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff, Scale, Mail, Lock } from 'lucide-react';
+import { Eye, EyeOff, Scale, Mail, Lock, Loader2 } from 'lucide-react'; // Added Loader2
 import './Auth.css';
 
-export default function Login(){
+export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  
+  // 1. Add loading state
+  const [loading, setLoading] = useState(false);
 
-
-const handleSubmit = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    setError(''); // Clear previous errors
+    setError('');
+    setLoading(true); // 2. Start loading
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/accounts/login/", {
+      const response = await fetch("http://127.0.0.1:8000/accounts/login/", { // Ensure this URL is correct
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -28,21 +31,24 @@ const handleSubmit = async (e) => {
       const data = await response.json();
 
       if (data.success) {
-        // SUCCESS: REDIRECT HERE 
-        // 1. SAVE THE NAME TO STORAGE
         localStorage.setItem('authToken', data.token);
-        localStorage.setItem('chatUser', data.user.name); 
+        localStorage.setItem('chatUser', data.user.name);
         console.log("Login Successful");
-        window.location.href = '/chatpage'; 
+        // Optional: Keep loading true here if you want it to spin until the redirect happens
+        window.location.href = '/chatpage';
       } else {
         setError(data.error || "Login failed");
         setTimeout(() => setError(''), 3000);
+        setLoading(false); // Stop loading on error
       }
 
     } catch (err) {
       console.log("Error:", err);
       setError("Server connection failed");
+      setLoading(false); // Stop loading on catch
     }
+    // Note: If you want to stop loading in all cases (except redirect), you can use a finally block,
+    // but typically we leave it true on success so the user doesn't see the form reset before the page changes.
   };
 
   return (
@@ -69,8 +75,9 @@ const handleSubmit = async (e) => {
                 className="form-input"
                 id='email'
                 value={email}
-                onChange={(e)=>setEmail(e.target.value)}
+                onChange={(e) => setEmail(e.target.value)}
                 required
+                disabled={loading} /* Disable input while loading */
               />
             </div>
           </div>
@@ -84,26 +91,43 @@ const handleSubmit = async (e) => {
                 placeholder="Enter your password"
                 className="form-input"
                 value={password}
-                onChange={(e)=>setPassword(e.target.value)}
+                onChange={(e) => setPassword(e.target.value)}
                 required
+                disabled={loading} /* Disable input while loading */
               />
-              <div 
+              <div
                 className="eye-icon"
-                onClick={() => setShowPassword(!showPassword)}
+                onClick={() => !loading && setShowPassword(!showPassword)}
+                style={{ cursor: loading ? 'not-allowed' : 'pointer' }}
               >
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </div>
             </div>
           </div>
-           {error && (
+          
+          {error && (
             <div className='error-message'> {error} </div>
-           )}
+          )}
+          
           <a href="/forgot-password" className="forgot-link">
             Forgot Password?
           </a>
 
-          <button type='submit' className="auth-button">
-            Login
+          {/* 3. Update Button with Loading State */}
+          <button 
+            type='submit' 
+            className="auth-button" 
+            disabled={loading}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+          >
+            {loading ? (
+              <>
+                <Loader2 size={18} className="animate-spin" /> {/* animate-spin usually needs CSS or Tailwind */}
+                <span>Signing In...</span>
+              </>
+            ) : (
+              "Login"
+            )}
           </button>
         </form>
 
