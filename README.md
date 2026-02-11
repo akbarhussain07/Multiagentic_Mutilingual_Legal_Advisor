@@ -45,29 +45,45 @@ The system is built using a modern 3-layer architecture:
 - **Deployment**: Docker for consistent environment containerization.
 
 📸 Screenshots
-1. Home Page
-The landing page introduces the "Trusted Guide" and provides quick access to the chatbot demo.
-![Login](login.png)
-*Login View*
+1. **Register Account Page**
+Create new account here.
 
-2. Features Section
+![Signup](SignupPage.png)
+
+
+2. **Home Page**
+The landing page introduces the "Trusted Guide" and provides quick access to the chatbot demo.
+
+![Home](HomePage.png)
+
+
+3. **Features Section**
 Highlights the core competencies: Statutory Law coverage, Islamic Law expertise, and Bilingual support.
 
-3. Chat Interface
+![Features](features.png)
+
+
+4. **Chat Interface**
 A clean, intuitive interface where users can ask legal questions and receive referenced answers.
 
-4. Explainable References
+![ChattingPage](Chatting-with-bot.png)
+
+
+5. **Explainable References**
 The chatbot provides specific source citations (e.g., Pakistan Penal Code, 1860) to ensure accuracy.
+
+![ChatReference](ChatWithReference.png)
+
 
 ## Disclaimer
 This system is for educational and guidance purposes only. It does not replace professional legal representation or provide binding legal judgments. Users must consult qualified legal authorities for final rulings.
 
 ## The Team
 
-Aftab Ali 
+- Aftab Ali 
 
 
-Akbar Hussain  
+- Akbar Hussain  
 
 
-Rehman Ali 
+- Rehman Ali 
