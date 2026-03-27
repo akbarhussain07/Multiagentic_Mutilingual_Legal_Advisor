@@ -288,6 +288,10 @@
   color: #999;
 }
 
+.message-sources{
+  color: #999;
+  border-top: 1px solid #999;
+}
 /* --- Input Area --- */
 .input-area {
   background: white;
