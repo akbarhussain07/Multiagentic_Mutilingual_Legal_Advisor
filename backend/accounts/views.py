@@ -25,8 +25,6 @@ def signin_user(request):
         return Response({"success": False, "error": "User with this email does not exist"}, status=404)
 
     # 2. Check if the password matches
-    # Note: For production, you should use hashed passwords (check_password), 
-    # but for now we are checking plain text based on your previous code.
     if user.check_password(password):
        # GET OR CREATE TOKEN
        token, _ = Token.objects.get_or_create(user=user)

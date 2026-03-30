@@ -11,7 +11,7 @@ def run_setup():
     load_dotenv()
     
     # Path to PDF - 
-    pdf_path = 'PEC2016.pdf' 
+    pdf_path = 'PPC.pdf' 
     
     url = os.getenv('NEO4J_URL')
     username = os.getenv('NEO4J_USERNAME')
