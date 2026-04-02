@@ -48,31 +48,31 @@ The system is built using a modern 3-layer architecture:
 1. **Register Account Page**
 Create new account here.
 
-![Signup](SignupPage.png)
+![Signup](pics/SignupPage.png)
 
 
 2. **Home Page**
 The landing page introduces the "Trusted Guide" and provides quick access to the chatbot demo.
 
-![Home](HomePage.png)
+![Home](pics/HomePage.png)
 
 
 3. **Features Section**
 Highlights the core competencies: Statutory Law coverage, Islamic Law expertise, and Bilingual support.
 
-![Features](features.png)
+![Features](pics/features.png)
 
 
 4. **Chat Interface**
 A clean, intuitive interface where users can ask legal questions and receive referenced answers.
 
-![ChattingPage](Chatting-with-bot.png)
+![ChattingPage](pics/Chatting-with-bot.png)
 
 
 5. **Explainable References**
 The chatbot provides specific source citations (e.g., Pakistan Penal Code, 1860) to ensure accuracy.
 
-![ChatReference](ChatWithReference.png)
+![ChatReference](pics/ChatWithReference.png)
 
 
 ## Disclaimer
@@ -86,4 +86,4 @@ This system is for educational and guidance purposes only. It does not replace p
 - Akbar Hussain  
 
 
-- Rehman Ali 
+- Siraj Ahmed 

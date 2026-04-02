@@ -11,7 +11,9 @@ def run_setup():
     load_dotenv()
     
     # Path to PDF - 
-    pdf_path = 'PPC.pdf' 
+    # pdf_path = 'PEC2016.pdf'
+    # pdf_path = 'PPC.pdf'
+    pdf_path = 'the-anti-terrorism-act-1997.pdf' 
     
     url = os.getenv('NEO4J_URL')
     username = os.getenv('NEO4J_USERNAME')
@@ -22,7 +24,7 @@ def run_setup():
         return
 
     try:
-        # 2. Read PDF (Notebook Logic)
+        # 2. Read PDF 
         print(f"Reading PDF: {pdf_path}...")
         reader = PdfReader(pdf_path)
         raw_text = ""
@@ -31,7 +33,7 @@ def run_setup():
             if content:
                 raw_text += content
 
-        # 3. Chunking (Notebook Logic)
+        # 3. Chunking 
         print("Splitting text into chunks...")
         text_splitter = Character_splitter = Character_text_splitter = CharacterTextSplitter(
             chunk_size=500,
@@ -41,7 +43,7 @@ def run_setup():
         texts = text_splitter.split_text(raw_text)
         docs = [Document(page_content=t) for t in texts]
 
-        # 4. Embeddings (Notebook Logic)
+        # 4. Embeddings 
         print("Initializing Embedding Model (all-mpnet-base-v2)...")
         embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-mpnet-base-v2"
