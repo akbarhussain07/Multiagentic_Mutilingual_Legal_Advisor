@@ -10,6 +10,6 @@ urlpatterns = [
     path('history/<str:session_id>/', views.get_session_messages, name='session_messages'),
     path('history/<str:session_id>/delete/', views.delete_session, name='delete_session'),
 
-    #Helth to check is database connected or not
+    #Helth to check is neo4j database connected or not
     path('health/', views.health_check, name='health_check'),
 ]

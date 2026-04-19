@@ -8,7 +8,6 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   
-  // 1. Add loading state
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -17,7 +16,7 @@ export default function Login() {
     setLoading(true); // 2. Start loading
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/accounts/login/", { // Ensure this URL is correct
+      const response = await fetch("http://127.0.0.1:8000/accounts/login/", { 
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -34,7 +33,7 @@ export default function Login() {
         localStorage.setItem('authToken', data.token);
         localStorage.setItem('chatUser', data.user.name);
         console.log("Login Successful");
-        // Optional: Keep loading true here if you want it to spin until the redirect happens
+        
         window.location.href = '/chatpage';
       } else {
         setError(data.error || "Login failed");
@@ -47,8 +46,6 @@ export default function Login() {
       setError("Server connection failed");
       setLoading(false); // Stop loading on catch
     }
-    // Note: If you want to stop loading in all cases (except redirect), you can use a finally block,
-    // but typically we leave it true on success so the user doesn't see the form reset before the page changes.
   };
 
   return (
@@ -122,7 +119,7 @@ export default function Login() {
           >
             {loading ? (
               <>
-                <Loader2 size={18} className="animate-spin" /> {/* animate-spin usually needs CSS or Tailwind */}
+                <Loader2 size={18} className="animate-spin" /> 
                 <span>Signing In...</span>
               </>
             ) : (

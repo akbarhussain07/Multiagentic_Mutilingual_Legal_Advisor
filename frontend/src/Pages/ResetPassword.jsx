@@ -44,7 +44,7 @@ const ResetPassword = () => {
         setSuccess(true);
         setTimeout(() => navigate('/login'), 3000); // Redirect after 3s
       } else {
-        // Display backend errors (e.g. Invalid Token, Password too short)
+        // Display backend errors 
         setError(JSON.stringify(data));
         setTimeout(() => setError(''), 3000);
       }

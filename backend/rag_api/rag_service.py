@@ -137,7 +137,7 @@ class RAGService:
             # We fetch more because the top 10 might be just Table of Contents
             all_docs = self.retriever.invoke(question)
             
-            # --- NEW FILTERING LOGIC STARTS HERE ---
+            # NEW FILTERING LOGIC STARTS HERE 
             useful_docs = []
             for doc in all_docs:
                 content = doc.page_content
@@ -162,7 +162,6 @@ class RAGService:
             final_docs = useful_docs[:5] if useful_docs else all_docs[:3]
             
             logger.info(f"Retrieved {len(all_docs)} docs, filtered down to {len(final_docs)} useful docs")
-            # ---------------------------------------
 
             # Step 4: Combine context
             context_text = "\n\n".join(doc.page_content for doc in final_docs)

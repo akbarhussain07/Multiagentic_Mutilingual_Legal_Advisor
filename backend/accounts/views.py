@@ -18,13 +18,13 @@ def signin_user(request):
     email = request.data.get('email')
     password = request.data.get('password')
     
-    # 1. Check if email exists in database
+    # Check if email exists in database
     try:
         user = User.objects.get(email=email)
     except User.DoesNotExist:
         return Response({"success": False, "error": "User with this email does not exist"}, status=404)
 
-    # 2. Check if the password matches
+    #  Check if the password matches
     if user.check_password(password):
        # GET OR CREATE TOKEN
        token, _ = Token.objects.get_or_create(user=user)
@@ -98,7 +98,7 @@ def forgot_password(request):
         token = default_token_generator.make_token(user)
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         
-        # Ensure this matches your React App's running port (usually 3000 or 5173)
+        # this matches React App's running port (usually 5173)
         reset_link = f"http://localhost:5173/reset-password/{uid}/{token}"
 
         send_mail(
@@ -117,31 +117,31 @@ def forgot_password(request):
 
 @api_view(['PATCH'])
 def reset_password(request):
-    # We expect these values from the React Frontend (ResetPassword.js)
+    # We expect these values from the React Frontend (ResetPassword.jxs)
     uidb64 = request.data.get('uidb64')
     token = request.data.get('token')
     password = request.data.get('password')
     confirm_password = request.data.get('confirm_password')
 
-    # 1. Basic Validation
+    #  Basic Validation
     if not uidb64 or not token or not password:
         return Response({"success": False, "error": "Missing required fields"}, status=400)
 
     if password != confirm_password:
         return Response({"success": False, "error": "Passwords do not match"}, status=400)
 
-    # 2. Decode the User ID
+    # Decoding the User ID
     try:
         uid = force_str(urlsafe_base64_decode(uidb64))
         user = User.objects.get(pk=uid)
     except (TypeError, ValueError, OverflowError, User.DoesNotExist):
         return Response({"success": False, "error": "Invalid reset link"}, status=400)
 
-    # 3. Check if the Token is valid and belongs to this user
+    # Check if the Token is valid and belongs to this user
     if not default_token_generator.check_token(user, token):
         return Response({"success": False, "error": "Invalid or expired token"}, status=400)
 
-    # 4. Set the new password
+    #  Set the new password
     user.set_password(password)
     user.save()
 

@@ -6,7 +6,7 @@ export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   
-  // 1. Add Loading and Success states
+  //  Add Loading and Success states
   const [loading, setLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
@@ -47,7 +47,7 @@ export default function Signup() {
       const data = await response.json();
 
       if (response.ok || data.success) {
-        // 2. On Success: Show Popup and wait 3 seconds before redirect
+        //  On Success: It will Show Popup and wait 3 seconds before redirect
         setShowSuccess(true);
         setTimeout(() => {
            window.location.href = "/login";
@@ -69,7 +69,7 @@ export default function Signup() {
   return (
     <div className="auth-container">
       
-      {/* 3. The Success Popup Overlay */}
+      {/*  The Success Popup Overlay */}
       {showSuccess && (
         <div className="popup-overlay">
           <div className="popup-card">

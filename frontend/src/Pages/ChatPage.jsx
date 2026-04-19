@@ -15,6 +15,7 @@ export default function ChatPage() {
   // 'messages' stores the content of the CURRENT active chat
   const [messages, setMessages] = useState([]);
   
+  // 'sidebarOpen' ,manages the side bar open or close
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false); // For sidebar loading
@@ -22,7 +23,7 @@ export default function ChatPage() {
   const messagesEndRef = useRef(null);
   const [username, setUsername] = useState('Guest');
 
-  // 1. Initial Setup: Check Auth, Health, and Load Sidebar History
+  // Initial Setup: Check Auth, Health, and Load Sidebar History
   useEffect(() => {
     const storedName = localStorage.getItem('chatUser');
     const token = localStorage.getItem('authToken');
@@ -36,7 +37,7 @@ export default function ChatPage() {
     }
   }, []);
 
-  // 2. Load Messages when Active Chat Changes
+  //  Load Messages when Active Chat Changes
   useEffect(() => {
     if (activeChat === 'new') {
       setMessages([]);
@@ -54,7 +55,7 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // --- API Interaction Functions ---
+  //  API Interaction Functions 
   const handleDeleteChat = async (e, sessionId) => {
     e.stopPropagation(); // Prevents the chat from opening when you click delete
     
@@ -292,7 +293,7 @@ export default function ChatPage() {
               </div>
               <h2 className="welcome-title">How can I help you today?</h2>
               <p className="welcome-subtitle">
-                Ask me anything about the Pakistani Laws. I will provide accurate
+                Ask me anything about the Pakistani and Islamic Laws. I will provide accurate
                 answers based on official documents.
               </p>
             </div>

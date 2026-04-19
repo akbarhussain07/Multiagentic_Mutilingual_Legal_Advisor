@@ -8,59 +8,6 @@ from rest_framework import status
 from .rag_service import RAGService
 import logging
 
-# from rest_framework.response import Response
-# from rest_framework import status
-# from .rag_service import RAGService
-# import logging
-
-# logger = logging.getLogger(__name__)
-
-# # Initialize RAG service (singleton)
-# rag_service = RAGService()
-
-# @api_view(['POST'])
-# def query_rag(request):
-#     """
-#     Query the RAG system with a legal question
-    
-#     Request body:
-#     {
-#         "question": "Your legal question here"
-#     }
-    
-#     Response:
-#     {
-#         "answer": "The answer from RAG",
-#         "sources": [...],
-#         "success": true
-#     }
-#     """
-#     try:
-#         question = request.data.get('question', '')
-        
-#         if not question:
-#             return Response(
-#                 {'error': 'Question is required'},
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-        
-#         # Query RAG system
-#         result = rag_service.query(question)
-        
-#         return Response(result, status=status.HTTP_200_OK)
-        
-#     except Exception as e:
-#         logger.error(f"Error in query_rag: {str(e)}")
-#         return Response(
-#             {'error': 'Internal server error', 'details': str(e)},
-#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
-#         )
-
-
-
-
-
-
 
 
 
@@ -227,7 +174,7 @@ def get_session_messages(request, session_id):
         
         data = [
             {
-                'type': 'user' if m.role == 'user' else 'bot', # Map to your React 'type'
+                'type': 'user' if m.role == 'user' else 'bot', # Mapped to  React 'type'
                 'content': m.content,
                 'timestamp': m.created_at.strftime("%H:%M") # Format time
             } for m in messages
