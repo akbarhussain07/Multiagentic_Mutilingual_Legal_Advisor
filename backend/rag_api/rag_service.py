@@ -33,8 +33,15 @@ class RAGService:
         try:
             # Initialize embeddings 
             logger.info("Loading embeddings model...")
+            # self.embeddings = HuggingFaceEmbeddings(
+            #     model_name="sentence-transformers/all-mpnet-base-v2"
+            # )
+
+            # Multilingual Embedding Model 
             self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-mpnet-base-v2"
+                model_name="intfloat/multilingual-e5-large",
+                model_kwargs={'device': 'cpu'},  # No 'normalize_embeddings' here
+                encode_kwargs={'normalize_embeddings': True},  # Correct parameter name and placement
             )
             # To this (384 model):
            # self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -101,16 +108,7 @@ class RAGService:
             # Initialize prompt template
             self.prompt = PromptTemplate(
                template="""
-                          You are a legal assistant for Pakistani Law. 
-      
-                          ### OBJECTIVE
-                          Your goal is to answer questions based ONLY on the provided Context.
-
-                          ### CONSTRAINTS
-                            1. **Language:** If the question is not in English, say: "Please enter your query in English."
-                            2. **Off-Topic / Personalities:** If the question is about celebrities, politicians (like Donald Trump), or general knowledge NOT found in the context, reply: "I don't have enough information in the provided context to answer this question accurately. Please ask me about Pakistani law."
-                            3. **Greetings:** If the user just says "Hi" or "Hello" with no other question, reply: "Hello! How can I assist you with Pakistani law today?"
-                            4. **Legal Answers:** If the question is legal and in the context, provide a concise answer with specific references to Sections/Articles.
+                          You are assistance provide answers from giving context accurately if there is not any answer than say I don't know
                     Context: {context}
 
                     Question: {question}

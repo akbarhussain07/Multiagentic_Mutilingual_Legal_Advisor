@@ -22,6 +22,12 @@ export default function ChatPage() {
   const [backendStatus, setBackendStatus] = useState('checking');
   const messagesEndRef = useRef(null);
   const [username, setUsername] = useState('Guest');
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [editData, setEditData] = useState({
+    username: localStorage.getItem('chatUser') || '',
+    email: '',
+    password: ''
+  });
 
   // Initial Setup: Check Auth, Health, and Load Sidebar History
   useEffect(() => {
@@ -195,6 +201,36 @@ export default function ChatPage() {
     window.location.href = '/login';
   };
 
+
+
+
+  const handleDeleteAccount = async () => {
+  const confirm = window.confirm("Are you sure? This will delete your account and all chat history permanently.");
+  if (confirm) {
+    try {
+      // Use the individual API function we built
+      await api.deleteUser(currentUserId); 
+      localStorage.clear();
+      navigate('/login');
+    } catch (err) {
+      alert("Could not delete account.");
+    }
+  }
+};
+
+const handleUpdateAccount = async (e) => {
+  e.preventDefault();
+  try {
+    const updated = await api.updateUser(currentUserId, editData);
+    localStorage.setItem('chatUser', updated.first); // Sync the sidebar name
+    setIsProfileModalOpen(false);
+    alert("Profile Updated!");
+  } catch (err) {
+    alert("Update failed.");
+  }
+};
+
+
   return (
     <div className="chat-page-container">
       {/* Sidebar */}
@@ -236,7 +272,69 @@ export default function ChatPage() {
           )}
         </div>
 
-        <div className="sidebar-footer">
+
+
+
+        <div className="sidebar-footer" onClick={() => setIsProfileModalOpen(true)} style={{ cursor: 'pointer' }}>
+      <div className="user-info">
+        <div className="user-avatar">
+          <User size={20} color="white" />
+        </div>
+        <span className="username">{username}</span>
+      </div>
+      <div className="settings-hint"> ⚙️</div>
+    </div>
+
+    {/* Profile & Settings Modal */}
+    {isProfileModalOpen && (
+      <div className="modal-overlay">
+        <div className="modal-content">
+          <div className="modal-header">
+            <h3>Account Settings</h3>
+            <button className='cross-btn' onClick={() => setIsProfileModalOpen(false)}>×</button>
+          </div>
+          
+          <form onSubmit={handleUpdateAccount}>
+            <div className="input-group">
+              <label>Username</label>
+              <input 
+                type="text" 
+                value={editData.username} 
+                onChange={e => setEditData({...editData, username: e.target.value})} 
+              />
+            </div>
+            <div className="input-group">
+              <label>Email Address</label>
+              <input 
+                type="email" 
+                placeholder="Update email..."
+                value={editData.email}
+                onChange={e => setEditData({...editData, email: e.target.value})} 
+              />
+            </div>
+            <div className="input-group">
+              <label>New Password</label>
+              <input 
+                type="password" 
+                placeholder="Leave blank to keep current" 
+                onChange={e => setEditData({...editData, password: e.target.value})} 
+              />
+            </div>
+
+            <div className="modal-actions-column">
+              <button type="submit" className="save-btn">Update Profile</button>
+              <button type="button" className="logout-btn-modal" onClick={handleLogout}>
+                Logout
+              </button>
+              <button type="button" className="del-btn" onClick={handleDeleteAccount}>
+                Delete Account
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
+        {/* <div className="sidebar-footer">
           <div className="user-info">
             <div className="user-avatar">
               <User size={20} color="white" />
@@ -247,7 +345,7 @@ export default function ChatPage() {
             <LogOut size={16} />
             Logout
           </button>
-        </div>
+        </div> */}
       </aside>
 
       {/* Main Content */}

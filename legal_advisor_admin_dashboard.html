@@ -1,0 +1,368 @@
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,wght@0,300;0,500;1,300&display=swap');
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --brand:#1a3a2e;--brand2:#2d6a4f;--accent:#e8c97e;--accentL:#fef3d0;
+    --bg:var(--color-background-primary);--bg2:var(--color-background-secondary);--bg3:var(--color-background-tertiary);
+    --txt:var(--color-text-primary);--txt2:var(--color-text-secondary);--txt3:var(--color-text-tertiary);
+    --bdr:var(--color-border-tertiary);--bdr2:var(--color-border-secondary);
+    --rad:var(--border-radius-lg);--rad2:var(--border-radius-md);
+    --success:var(--color-background-success);--successT:var(--color-text-success);
+    --danger:var(--color-background-danger);--dangerT:var(--color-text-danger);
+    --info:var(--color-background-info);--infoT:var(--color-text-info);
+  }
+  body{font-family:var(--font-sans);background:var(--bg3);color:var(--txt);min-height:100vh}
+
+  .shell{display:grid;grid-template-columns:220px 1fr;grid-template-rows:56px 1fr;height:100vh;min-height:600px}
+
+  /* Top bar */
+  .topbar{grid-column:1/-1;background:var(--brand);display:flex;align-items:center;padding:0 20px;gap:12px;border-bottom:1px solid rgba(255,255,255,.08)}
+  .topbar-logo{font-family:'Fraunces',serif;font-weight:300;font-size:17px;color:#d4edda;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+  .topbar-logo .dot{width:8px;height:8px;background:var(--accent);border-radius:50%;flex-shrink:0}
+  .topbar-badge{margin-left:auto;font-size:11px;background:rgba(255,255,255,.1);color:#b2d8c0;padding:3px 10px;border-radius:20px;font-family:'DM Mono',monospace}
+  .topbar-avatar{width:30px;height:30px;border-radius:50%;background:var(--brand2);border:1.5px solid rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#d4edda;margin-left:10px;cursor:pointer}
+
+  /* Sidebar */
+  .sidebar{background:var(--bg);border-right:0.5px solid var(--bdr);padding:16px 0;overflow-y:auto}
+  .sidebar-section{padding:0 12px;margin-bottom:6px}
+  .sidebar-label{font-size:10px;color:var(--txt3);letter-spacing:.08em;text-transform:uppercase;padding:8px 8px 4px}
+  .nav-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--rad2);cursor:pointer;font-size:13px;color:var(--txt2);transition:background .15s,color .15s;margin-bottom:2px;border:none;background:none;width:100%;text-align:left}
+  .nav-item:hover{background:var(--bg2);color:var(--txt)}
+  .nav-item.active{background:linear-gradient(135deg,rgba(45,106,79,.12),rgba(45,106,79,.06));color:var(--brand2);font-weight:500;border-left:2px solid var(--brand2);padding-left:8px}
+  .nav-icon{width:16px;height:16px;flex-shrink:0;opacity:.7}
+  .nav-count{margin-left:auto;font-size:11px;background:var(--bg2);color:var(--txt3);padding:1px 7px;border-radius:10px;font-family:'DM Mono',monospace}
+
+  /* Main */
+  .main{overflow-y:auto;padding:24px}
+
+  /* Stats row */
+  .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+  .stat-card{background:var(--bg);border:0.5px solid var(--bdr);border-radius:var(--rad);padding:16px 18px;position:relative;overflow:hidden}
+  .stat-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:var(--stripe,var(--brand2));border-radius:2px 0 0 2px}
+  .stat-label{font-size:11px;color:var(--txt3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+  .stat-num{font-family:'Fraunces',serif;font-size:28px;font-weight:300;color:var(--txt);line-height:1}
+  .stat-sub{font-size:11px;color:var(--successT);margin-top:4px;display:flex;align-items:center;gap:3px}
+  .stat-sub.down{color:var(--dangerT)}
+
+  /* Content grid */
+  .content-grid{display:grid;grid-template-columns:1fr 340px;gap:16px}
+
+  /* Panel */
+  .panel{background:var(--bg);border:0.5px solid var(--bdr);border-radius:var(--rad);overflow:hidden}
+  .panel-head{padding:14px 18px;border-bottom:0.5px solid var(--bdr);display:flex;align-items:center;gap:10px}
+  .panel-title{font-size:13px;font-weight:500;color:var(--txt)}
+  .panel-sub{font-size:11px;color:var(--txt3);margin-left:auto}
+  .panel-body{padding:0}
+
+  /* Search bar */
+  .search-wrap{padding:12px 16px;border-bottom:0.5px solid var(--bdr)}
+  .search-input{width:100%;background:var(--bg2);border:0.5px solid var(--bdr);border-radius:var(--rad2);padding:7px 12px;font-size:13px;color:var(--txt);outline:none;transition:border-color .15s}
+  .search-input:focus{border-color:var(--bdr2)}
+  .search-input::placeholder{color:var(--txt3)}
+
+  /* User list */
+  .user-list{max-height:420px;overflow-y:auto}
+  .user-row{display:flex;align-items:center;gap:12px;padding:11px 16px;cursor:pointer;border-bottom:0.5px solid var(--bdr);transition:background .12s}
+  .user-row:last-child{border-bottom:none}
+  .user-row:hover{background:var(--bg2)}
+  .user-row.selected{background:linear-gradient(90deg,rgba(45,106,79,.08),transparent)}
+  .avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:500;flex-shrink:0}
+  .user-info{flex:1;min-width:0}
+  .user-name{font-size:13px;font-weight:500;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .user-email{font-size:11px;color:var(--txt3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+  .user-meta{text-align:right;flex-shrink:0}
+  .user-queries{font-family:'DM Mono',monospace;font-size:12px;color:var(--txt2)}
+  .user-date{font-size:10px;color:var(--txt3);margin-top:2px}
+  .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:3px}
+  .status-dot.active{background:#4caf84}
+  .status-dot.inactive{background:#aaa}
+
+  /* Right panel: user detail */
+  .detail-panel{display:flex;flex-direction:column;gap:16px}
+
+  .detail-card{background:var(--bg);border:0.5px solid var(--bdr);border-radius:var(--rad);overflow:hidden}
+  .detail-user-header{padding:18px;background:linear-gradient(135deg,rgba(45,106,79,.06),rgba(232,201,126,.06));border-bottom:0.5px solid var(--bdr);display:flex;align-items:center;gap:14px}
+  .detail-avatar{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:500;border:2px solid var(--bg)}
+  .detail-name{font-size:15px;font-weight:500;color:var(--txt)}
+  .detail-email{font-size:12px;color:var(--txt3);margin-top:2px}
+  .detail-chips{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .chip{font-size:10px;padding:2px 8px;border-radius:10px;font-family:'DM Mono',monospace}
+  .chip.active{background:var(--success);color:var(--successT)}
+  .chip.staff{background:var(--info);color:var(--infoT)}
+  .chip.inactive{background:var(--bg2);color:var(--txt3)}
+
+  .detail-stats{display:grid;grid-template-columns:repeat(3,1fr);padding:14px 18px;gap:8px;border-bottom:0.5px solid var(--bdr)}
+  .ds-num{font-family:'Fraunces',serif;font-size:22px;font-weight:300;color:var(--txt)}
+  .ds-lbl{font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+
+  /* Query log */
+  .queries-head{padding:12px 18px;display:flex;align-items:center;gap:8px;border-bottom:0.5px solid var(--bdr)}
+  .queries-title{font-size:12px;font-weight:500;color:var(--txt)}
+  .queries-count{font-size:10px;color:var(--txt3);margin-left:auto;font-family:'DM Mono',monospace}
+  .query-list{max-height:240px;overflow-y:auto}
+  .query-item{padding:10px 18px;border-bottom:0.5px solid var(--bdr);cursor:pointer;transition:background .12s}
+  .query-item:last-child{border-bottom:none}
+  .query-item:hover{background:var(--bg2)}
+  .query-text{font-size:12px;color:var(--txt);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .query-footer{display:flex;align-items:center;gap:8px;margin-top:5px}
+  .query-time{font-size:10px;color:var(--txt3);font-family:'DM Mono',monospace}
+  .query-lang{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--bg2);color:var(--txt3)}
+  .query-rating{font-size:10px;color:var(--accent);margin-left:auto}
+
+  /* Empty state */
+  .empty{padding:40px 20px;text-align:center;color:var(--txt3);font-size:13px}
+
+  /* Scrollbar */
+  ::-webkit-scrollbar{width:4px;height:4px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--bdr2);border-radius:4px}
+</style>
+
+<div class="shell">
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-logo"><span class="dot"></span>LegalAdvisor · Admin</div>
+    <div class="topbar-badge">X-RAG System v1.0</div>
+    <div class="topbar-avatar" title="Aftab Ali">AA</div>
+  </header>
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Overview</div>
+      <button class="nav-item active" onclick="setPage('dashboard')">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+        Dashboard
+      </button>
+      <button class="nav-item" onclick="setPage('users')">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+        Users
+        <span class="nav-count">8</span>
+      </button>
+      <button class="nav-item" onclick="setPage('queries')">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12v7a2 2 0 01-2 2H4a2 2 0 01-2-2V3z"/><path d="M5 7h6M5 10h3"/></svg>
+        All Queries
+        <span class="nav-count">47</span>
+      </button>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">System</div>
+      <button class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v4l2 2M14 8A6 6 0 112 8a6 6 0 0112 0z"/></svg>
+        Activity Log
+      </button>
+      <button class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg>
+        Settings
+      </button>
+      <button class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12V6a4 4 0 018 0v6M2 12h12"/></svg>
+        Auth Tokens
+      </button>
+    </div>
+    <div class="sidebar-section" style="margin-top:auto;padding-top:20px">
+      <div style="padding:10px;background:var(--bg2);border-radius:var(--rad2);font-size:11px;color:var(--txt3);text-align:center">
+        <div style="color:var(--txt2);font-weight:500;margin-bottom:2px">Akhuwat College Kasur</div>
+        Final Year Project · BS-IT 2026
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="main" id="main-content">
+    <!-- DASHBOARD PAGE -->
+    <div id="page-dashboard">
+      <!-- Stat cards -->
+      <div class="stats-row">
+        <div class="stat-card" style="--stripe:#2d6a4f">
+          <div class="stat-label">Total Users</div>
+          <div class="stat-num">8</div>
+          <div class="stat-sub">↑ 2 this week</div>
+        </div>
+        <div class="stat-card" style="--stripe:#e8c97e">
+          <div class="stat-label">Total Queries</div>
+          <div class="stat-num">47</div>
+          <div class="stat-sub">↑ 12 today</div>
+        </div>
+        <div class="stat-card" style="--stripe:#5b8dd9">
+          <div class="stat-label">Avg Rating</div>
+          <div class="stat-num">4.2</div>
+          <div class="stat-sub">★ out of 5</div>
+        </div>
+        <div class="stat-card" style="--stripe:#c0543a">
+          <div class="stat-label">Active Today</div>
+          <div class="stat-num">3</div>
+          <div class="stat-sub down">↓ 1 vs yesterday</div>
+        </div>
+      </div>
+
+      <!-- Main grid -->
+      <div class="content-grid">
+        <!-- Users panel -->
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Registered Users</div>
+            <div class="panel-sub">Click a user to see their queries →</div>
+          </div>
+          <div class="search-wrap">
+            <input class="search-input" id="search-input" placeholder="Search by name or email…" oninput="filterUsers(this.value)">
+          </div>
+          <div class="user-list" id="user-list"></div>
+        </div>
+
+        <!-- Detail panel -->
+        <div class="detail-panel" id="detail-panel">
+          <div class="detail-card">
+            <div class="empty" style="padding:60px 20px">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="margin:0 auto 12px;display:block;opacity:.3"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>
+              Select a user to view their query history
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const COLORS = ['#2d6a4f','#5b8dd9','#b85c38','#8b5e99','#c07d2e','#3a7a78','#c0543a','#4a7c59'];
+
+const USERS = [
+  {id:1, username:'aftab', email:'aftabali.deve@gmail.com', first:'Aftab', last:'Ali', active:true, staff:true, joined:'2024-09-01', queries:[
+    {id:1, text:'What are the tenant rights under Pakistani property law?', time:'2025-04-23 14:32', lang:'English', rating:5},
+    {id:2, text:'Explain Section 420 of PPC in simple terms', time:'2025-04-22 09:11', lang:'English', rating:4},
+    {id:3, text:'پاکستان میں طلاق کا طریقہ کار کیا ہے؟', time:'2025-04-20 17:05', lang:'Urdu', rating:5},
+    {id:4, text:'What documents are needed to file a civil lawsuit?', time:'2025-04-18 11:20', lang:'English', rating:4},
+  ]},
+  {id:2, username:'Aftab07', email:'aftab@gmail.com', first:'Aftab', last:'', active:false, staff:false, joined:'2024-10-15', queries:[
+    {id:5, text:'How to register a business in Pakistan?', time:'2025-04-21 10:00', lang:'English', rating:3},
+    {id:6, text:'What is the procedure for bail application?', time:'2025-04-19 16:40', lang:'English', rating:4},
+  ]},
+  {id:3, username:'Akbar', email:'akbar@gmail.com', first:'Akbar', last:'Hussain', active:false, staff:false, joined:'2024-09-05', queries:[
+    {id:7, text:'گھریلو تشدد کے قانون کی تفصیل بتائیں', time:'2025-04-22 12:00', lang:'Urdu', rating:5},
+    {id:8, text:'Can a landlord evict a tenant without notice?', time:'2025-04-20 08:30', lang:'English', rating:4},
+    {id:9, text:'What is the Child Marriage Restraint Act?', time:'2025-04-15 14:10', lang:'English', rating:5},
+    {id:10, text:'How to file an FIR for theft?', time:'2025-04-10 09:50', lang:'English', rating:3},
+    {id:11, text:'Inheritance rights of daughters in Islam and Pakistani law', time:'2025-04-08 16:00', lang:'English', rating:5},
+  ]},
+  {id:4, username:'saifali@gmail.com', email:'saifali@gmail.com', first:'Saif', last:'Ali', active:false, staff:false, joined:'2024-11-01', queries:[
+    {id:12, text:'Employment termination rights under labor law', time:'2025-04-17 11:30', lang:'English', rating:4},
+    {id:13, text:'ملازمت کے دوران چھٹی کے حقوق کیا ہیں؟', time:'2025-04-14 09:00', lang:'Urdu', rating:3},
+  ]},
+  {id:5, username:'siraj@gmail.com', email:'siraj@gmail.com', first:'Siraj', last:'Ahmed', active:false, staff:false, joined:'2024-10-20', queries:[
+    {id:14, text:'What are cybercrime laws in Pakistan?', time:'2025-04-23 08:00', lang:'English', rating:5},
+    {id:15, text:'How to report online fraud in Pakistan?', time:'2025-04-21 14:15', lang:'English', rating:4},
+    {id:16, text:'PECA 2016 کے تحت کیا سزائیں ہیں؟', time:'2025-04-19 11:00', lang:'Urdu', rating:4},
+  ]},
+  {id:6, username:'sirajahmed221@gmail.com', email:'sirajahmed221@gmail.com', first:'Siraj', last:'', active:false, staff:false, joined:'2024-12-01', queries:[
+    {id:17, text:'Drug trafficking penalties under CNS Act', time:'2025-04-16 10:20', lang:'English', rating:4},
+  ]},
+  {id:7, username:'umair@gmail.com', email:'umair@gmail.com', first:'Umair', last:'Ali', active:false, staff:false, joined:'2025-01-10', queries:[
+    {id:18, text:'How to challenge an illegal property sale?', time:'2025-04-22 15:30', lang:'English', rating:3},
+    {id:19, text:'Writ petition procedure in High Court', time:'2025-04-20 13:00', lang:'English', rating:5},
+    {id:20, text:'Supreme Court appeal process in Pakistan', time:'2025-04-18 09:45', lang:'English', rating:4},
+    {id:21, text:'وراثت کے مقدمے میں ثبوت کیسے پیش کریں؟', time:'2025-04-15 16:30', lang:'Urdu', rating:4},
+  ]},
+  {id:8, username:'admin_test', email:'admin@legaladvisor.pk', first:'Admin', last:'Test', active:false, staff:false, joined:'2025-02-01', queries:[
+    {id:22, text:'Test query for system verification', time:'2025-04-23 07:00', lang:'English', rating:5},
+    {id:23, text:'Another test: PMDA regulations overview', time:'2025-04-22 18:00', lang:'English', rating:4},
+    {id:24, text:'آزمائشی سوال: سسٹم چیک', time:'2025-04-21 12:00', lang:'Urdu', rating:5},
+    {id:25, text:'Defamation law in Pakistan digital context', time:'2025-04-20 10:30', lang:'English', rating:4},
+    {id:26, text:'Anti-terrorism court jurisdiction', time:'2025-04-19 14:00', lang:'English', rating:3},
+    {id:27, text:'How is blasphemy law applied under Section 295-C?', time:'2025-04-17 09:00', lang:'English', rating:4},
+  ]},
+];
+
+let selectedUser = null;
+let filteredUsers = [...USERS];
+
+function initials(u){return((u.first||'')[0]||'')+(u.last?u.last[0]:u.username[1]||'').toUpperCase()}
+function colorFor(id){return COLORS[(id-1)%COLORS.length]}
+
+function renderUserList(users){
+  const el = document.getElementById('user-list');
+  el.innerHTML = users.map(u=>`
+    <div class="user-row${selectedUser&&selectedUser.id===u.id?' selected':''}" onclick="selectUser(${u.id})">
+      <div class="avatar" style="background:${colorFor(u.id)}22;color:${colorFor(u.id)}">${initials(u)}</div>
+      <div class="user-info">
+        <div class="user-name"><span class="status-dot ${u.active?'active':'inactive'}"></span>${u.first} ${u.last}</div>
+        <div class="user-email">${u.email}</div>
+      </div>
+      <div class="user-meta">
+        <div class="user-queries">${u.queries.length} queries</div>
+        <div class="user-date">${u.joined}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function selectUser(id){
+  selectedUser = USERS.find(u=>u.id===id);
+  renderUserList(filteredUsers);
+  renderDetail(selectedUser);
+}
+
+function renderDetail(u){
+  const avgRating = u.queries.length ? (u.queries.reduce((a,q)=>a+q.rating,0)/u.queries.length).toFixed(1) : '–';
+  const lastSeen = u.queries.length ? u.queries[0].time.split(' ')[0] : '–';
+  document.getElementById('detail-panel').innerHTML = `
+    <div class="detail-card">
+      <div class="detail-user-header">
+        <div class="detail-avatar" style="background:${colorFor(u.id)}22;color:${colorFor(u.id)};border-color:${colorFor(u.id)}33">${initials(u)}</div>
+        <div>
+          <div class="detail-name">${u.first} ${u.last}</div>
+          <div class="detail-email">${u.email}</div>
+          <div class="detail-chips">
+            <span class="chip ${u.active?'active':'inactive'}">${u.active?'● active':'● inactive'}</span>
+            ${u.staff?'<span class="chip staff">staff</span>':''}
+            <span class="chip inactive">joined ${u.joined}</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-stats">
+        <div><div class="ds-num">${u.queries.length}</div><div class="ds-lbl">Queries</div></div>
+        <div><div class="ds-num">${avgRating}</div><div class="ds-lbl">Avg Rating</div></div>
+        <div><div class="ds-num">${lastSeen}</div><div class="ds-lbl">Last active</div></div>
+      </div>
+    </div>
+    <div class="detail-card">
+      <div class="queries-head">
+        <div class="queries-title">Query History</div>
+        <div class="queries-count">${u.queries.length} total</div>
+      </div>
+      <div class="query-list">
+        ${u.queries.length ? u.queries.map(q=>`
+          <div class="query-item" onclick="sendPrompt('Show me full details and the RAG response for query: ${q.text.replace(/'/g,"\\'")}')">
+            <div class="query-text">${q.text}</div>
+            <div class="query-footer">
+              <span class="query-time">${q.time}</span>
+              <span class="query-lang">${q.lang}</span>
+              <span class="query-rating">${'★'.repeat(q.rating)}${'☆'.repeat(5-q.rating)}</span>
+            </div>
+          </div>
+        `).join('') : '<div class="empty">No queries yet</div>'}
+      </div>
+    </div>
+  `;
+}
+
+function filterUsers(val){
+  const q = val.toLowerCase();
+  filteredUsers = USERS.filter(u=>
+    u.username.toLowerCase().includes(q)||
+    u.email.toLowerCase().includes(q)||
+    u.first.toLowerCase().includes(q)||
+    u.last.toLowerCase().includes(q)
+  );
+  renderUserList(filteredUsers);
+}
+
+function setPage(p){
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+}
+
+renderUserList(filteredUsers);
+</script>

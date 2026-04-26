@@ -13,7 +13,8 @@ def run_setup():
     # Path to PDF - 
     # pdf_path = 'PEC2016.pdf'
     # pdf_path = 'PPC.pdf'
-    pdf_path = 'the-anti-terrorism-act-1997.pdf' 
+    # pdf_path = 'the-anti-terrorism-act-1997.pdf' 
+    pdf_path = 'AlKafiV1.pdf'
     
     url = os.getenv('NEO4J_URL')
     username = os.getenv('NEO4J_USERNAME')
@@ -45,8 +46,15 @@ def run_setup():
 
         # 4. Embeddings 
         print("Initializing Embedding Model (all-mpnet-base-v2)...")
+        # embeddings = HuggingFaceEmbeddings(
+        #     model_name="sentence-transformers/all-mpnet-base-v2"
+        # )
+         
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-mpnet-base-v2"
+            model_name="intfloat/multilingual-e5-large",
+            model_kwargs={'device': 'cpu'},  # No 'normalize_embeddings' here
+            encode_kwargs={'normalize_embeddings': True},  # Correct parameter name and placement
+            # encode_kwargs={'normalize_embedding':True}
         )
 
         # 5. Load into Neo4j

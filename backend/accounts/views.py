@@ -11,7 +11,14 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.core.mail import send_mail
 from django.conf import settings
+from google.oauth2 import id_token
+from google.auth.transport import requests
+from dotenv import load_dotenv
+import os
 # Create your views here.
+
+load_dotenv()
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
 @api_view(['POST'])
 def signin_user(request):
@@ -32,8 +39,10 @@ def signin_user(request):
             "token":token.key,
             "success": True, 
             "user": {
+                "id":user.id,
                 "name": user.first_name,  
-                "email": user.email
+                "email": user.email,
+                "is_superuser":user.is_superuser,
             }
         })
     else:
@@ -146,3 +155,45 @@ def reset_password(request):
     user.save()
 
     return Response({"success": True, "message": "Password has been reset successfully"})
+
+
+
+
+
+
+@api_view(['POST'])
+def google_oauth(request):
+    token = request.data.get('id_token')
+    print(f"Received Token: {token[:20]}...")
+
+    if not token:
+        return Response({"success": False, "error": "Token missing"}, status=400)
+    
+    try:
+        # 1. Verify the token with Google
+        # Replace 'YOUR_GOOGLE_CLIENT_ID' with your actual Client ID from Google Console
+        idinfo = id_token.verify_oauth2_token(token, requests.Request(), 'GOOGLE_CLIENT_ID')
+
+        email = idinfo['email']
+        name = idinfo.get('name', '')
+
+        # 2. Get or Create the user in your PostgreSQL DB
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={'username': email, 'first_name': name}
+        )
+
+        # 3. Generate or retrieve your DRF Token (Consistent with your current signin_user logic)
+        drf_token, _ = Token.objects.get_or_create(user=user)
+
+        return Response({
+            "success": True,
+            "token": drf_token.key,
+            "user": {
+                "name": user.first_name,
+                "email": user.email
+            }
+        })
+
+    except ValueError:
+        return Response({"success": False, "error": "Invalid Google token"}, status=400)    
