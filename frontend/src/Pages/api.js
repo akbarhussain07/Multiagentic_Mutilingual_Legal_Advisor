@@ -1,12 +1,59 @@
 // Backend API integration for Django server
 
-const API_BASE_URL = 'http://localhost:8000/api';
+const API_BASE_URL = 'http://localhost:8000/';
+// const API_BASE_URL = 'https://2d1zf1zf-8000.inc1.devtunnels.ms/';
+
+// Helper to get headers with Auth Token
+const getHeaders = () => {
+    const token = localStorage.getItem('authToken');
+    return {
+        'Content-Type': 'application/json',
+        'Authorization': `Token ${token}` 
+    };
+};
+
+
+// Add this to your existing api.js
+export const signup = async (userData) => {
+  const response = await fetch(`${API_BASE_URL}/accounts/signup/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(userData),
+  });
+  
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Signup failed");
+  }
+  return data;
+};
+
+
+// Add this to your existing api.js
+export const login = async (credentials) => {
+  const response = await fetch(`${API_BASE_URL}/accounts/login/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(credentials),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || "Login failed");
+  }
+
+  return data; // Contains token and user info
+};
 
 // Check backend health status
-
 export const checkHealth = async () => {
   try {
-    const response = await fetch(`${API_BASE_URL}/health/`, {
+    const response = await fetch(`${API_BASE_URL}/api/health/`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -24,17 +71,10 @@ export const checkHealth = async () => {
   }
 };
 
-// Helper to get headers with Auth Token
-const getHeaders = () => {
-    const token = localStorage.getItem('authToken');
-    return {
-        'Content-Type': 'application/json',
-        'Authorization': `Token ${token}` 
-    };
-};
+
 
 export const queryLegalQuestion = async (question, sessionId = null) => {
-    const response = await fetch(`${API_BASE_URL}/query/`, {
+    const response = await fetch(`${API_BASE_URL}/api/query/`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ 
@@ -48,7 +88,7 @@ export const queryLegalQuestion = async (question, sessionId = null) => {
 
 // Fetch Sidebar Data
 export const getUserSessions = async () => {
-    const response = await fetch(`${API_BASE_URL}/history/`, {
+    const response = await fetch(`${API_BASE_URL}/api/history/`, {
         headers: getHeaders()
     });
     if (!response.ok) throw new Error('Failed to fetch history');
@@ -57,7 +97,7 @@ export const getUserSessions = async () => {
 
 // Fetch Chat Messages
 export const getSessionMessages = async (sessionId) => {
-    const response = await fetch(`${API_BASE_URL}/history/${sessionId}/`, {
+    const response = await fetch(`${API_BASE_URL}/api/history/${sessionId}/`, {
         headers: getHeaders()
     });
     if (!response.ok) throw new Error('Failed to fetch messages');
@@ -66,7 +106,7 @@ export const getSessionMessages = async (sessionId) => {
 
 // Delete Chat Session by sessionId
 export const deleteChatSession = async (sessionId) => {
-    const response = await fetch(`${API_BASE_URL}/history/${sessionId}/delete/`, {
+    const response = await fetch(`${API_BASE_URL}/api/history/${sessionId}/delete/`, {
         method: 'DELETE',
         headers: getHeaders()
     });
@@ -79,7 +119,7 @@ export const deleteChatSession = async (sessionId) => {
 // ---- Admin Dashboard API's ------
 // Fetch any user profile by userId
 export const getUserProfile = async (userId) => {
-    const response = await fetch(`http://127.0.0.1:8000/admin/users/${userId}/`, {
+    const response = await fetch(`${API_BASE_URL}/admin/users/${userId}/`, {
         method: 'GET',
         headers:getHeaders(),
     });
@@ -89,7 +129,7 @@ export const getUserProfile = async (userId) => {
 
 // Delete any user by it's userId
 export const deleteUser = async (userId) => {
-    const response = await fetch(`http://127.0.0.1:8000/admin/users/${userId}/delete/`,{
+    const response = await fetch(`${API_BASE_URL}/admin/users/${userId}/delete/`,{
         method: 'DELETE',
         headers:getHeaders(),
     });
@@ -99,7 +139,7 @@ export const deleteUser = async (userId) => {
 
 // Update any user by userId
 export const updateUser = async (userId, editData) => {
-    const response = await fetch(`http://127.0.0.1:8000/admin/users/${userId}/update/`, {
+    const response = await fetch(`${API_BASE_URL}/admin/users/${userId}/update/`, {
         method: 'PUT',
         headers:getHeaders(),
         body: JSON.stringify(editData),
@@ -110,7 +150,7 @@ export const updateUser = async (userId, editData) => {
 
 // Fetch all users and shown in Admin Dashboard
 export const getAllUsers = async () => {
-    const response = await fetch('http://127.0.0.1:8000/admin/users/', {
+    const response = await fetch(`${API_BASE_URL}/admin/users/`, {
         headers: getHeaders(),
     });
     if (!response.ok) throw new Error('User fetching failed on the server');

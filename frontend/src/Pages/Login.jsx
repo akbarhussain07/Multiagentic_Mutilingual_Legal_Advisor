@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Eye, EyeOff, Scale, Mail, Lock, Loader2 } from 'lucide-react'; // Added Loader2
 import './Auth.css';
 import { GoogleOAuthProvider,GoogleLogin } from '@react-oauth/google';
 import { useNavigate } from 'react-router-dom';
+import * as api from './api';
+
 
 export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
@@ -12,86 +14,49 @@ export default function Login() {
   
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const handleSubmit = async (e) => {
+
+
+
+  // Auto-clear errors after 3 seconds
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
+const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    setLoading(true); // 2. Start loading
+    setLoading(true);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/accounts/login/", { 
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: email,
-          password: password,
-        }),
-      });
+      // 1. Call the centralized API
+      const data = await api.login({ email, password });
 
-      const data = await response.json();
-
-      if (data.success) {
-        localStorage.setItem('authToken', data.token);
-        localStorage.setItem('chatUser', data.user.name);
-        localStorage.setItem('id',data.user.id);
-        console.log("Login Successful");
-        if(data.user && data.user.is_superuser){
-          localStorage.setItem('isAdmin','true');
-          localStorage.setItem('user', JSON.stringify(data.user));
-          
-          console.log("Redirecting to Admin...");
-          navigate('/admin');
-        }else{
-          localStorage.setItem('isAdmin', 'false');
-          navigate('/chatpage');
-        }
+      // 2. Store user session data
+      localStorage.setItem('authToken', data.token);
+      localStorage.setItem('chatUser', data.user.name);
+      localStorage.setItem('userId', data.user.id);
+      
+      // 3. Role-based Redirection
+      if (data.user && data.user.is_superuser) {
+        localStorage.setItem('isAdmin', 'true');
+        localStorage.setItem('user', JSON.stringify(data.user));
+        navigate('/admin');
       } else {
-        setError(data.error || "Login failed");
-        setTimeout(() => setError(''), 3000);
-        setLoading(false); // Stop loading on error
+        localStorage.setItem('isAdmin', 'false');
+        navigate('/chatpage');
       }
 
     } catch (err) {
-      console.log("Error:", err);
-      setError("Server connection failed");
-      setLoading(false); // Stop loading on catch
+      setError(err.message || "Server connection failed");
+      setLoading(false);
     }
   };
 
 
-
-
-
-  const handleGoogleSuccess = async (credentialResponse) => {
-    setLoading(true);
-    try {
-        const response = await fetch("http://127.0.0.1:8000/accounts/google-login/", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id_token: credentialResponse.credential }),
-        });
-
-        const data = await response.json();
-        if (data.success) {
-            localStorage.setItem('authToken', data.token);
-            localStorage.setItem('chatUser', data.user.name);
-            window.location.href = '/chatpage';
-        } else {
-            setError("Google Login Failed");
-        }
-    } catch (err) {
-        setError("Server connection failed");
-    } finally {
-        setLoading(false);
-    }
-};
-
-
-
-
   return (
-    <GoogleOAuthProvider clientId='283760635076-l32hqgkdnrt08bgnj04cgqhsskruilq7.apps.googleusercontent.com'>
     <div className="auth-container">
       <div className="auth-card login-card">
         <div className="auth-logo">
@@ -170,14 +135,6 @@ export default function Login() {
             )}
           </button>
         </form>
-        <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'center' }}>
-          <GoogleLogin
-            onSuccess={handleGoogleSuccess}
-            onError={() => setError("Google Auth Failed")}
-            theme="outline"
-            text="continue_with"
-          />
-        </div>
         <p className="switch-text">
           Don't have an account?{' '}
           <a href="/signup" className="switch-link">
@@ -186,6 +143,5 @@ export default function Login() {
         </p>
       </div>
     </div>
-    </GoogleOAuthProvider>
   );
 };

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Eye, EyeOff, Scale, Mail, Lock, User, CheckCircle, Loader2 } from 'lucide-react';
 import './Auth.css';
+import * as api from './api';
+
 
 export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
@@ -16,6 +18,7 @@ export default function Signup() {
     password:'',
     confirmpass:''
   });
+
   const [error, setError] = useState('');
 
   const handleSubmit = async (e) => {
@@ -32,40 +35,32 @@ export default function Signup() {
     setLoading(true); // Start loading
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/accounts/signup/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username: formData.username,
-          email: formData.email,
-          password: formData.password,
-        }),
+      // 2. Call API service
+      await api.signup({
+        username: formData.username,
+        email: formData.email,
+        password: formData.password,
       });
 
-      const data = await response.json();
+      // 3. Handle Success
+      setShowSuccess(true);
+      setTimeout(() => {
+        window.location.href = "/login";
+      }, 3000);
 
-      if (response.ok || data.success) {
-        //  On Success: It will Show Popup and wait 3 seconds before redirect
-        setShowSuccess(true);
-        setTimeout(() => {
-           window.location.href = "/login";
-        }, 3000);
-      } else {
-        // Handle API errors
-        setError(data.error || "Signup failed");
-        setTimeout(() => setError(''), 3000);
-        setLoading(false);
-      }
     } catch (err) {
-      console.log("Error:", err);
-      setError("Server connection failed");
-      setTimeout(() => setError(''), 3000);
+      // 4. Handle Errors
+      setError(err.message || "Server connection failed");
       setLoading(false);
     }
   };
-
+  
+React.useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
   return (
     <div className="auth-container">
       
