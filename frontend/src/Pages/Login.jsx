@@ -37,7 +37,9 @@ const handleSubmit = async (e) => {
       // 2. Store user session data
       localStorage.setItem('authToken', data.token);
       localStorage.setItem('chatUser', data.user.name);
+      localStorage.setItem('userEmail', data.user.email);
       localStorage.setItem('userId', data.user.id);
+
       
       // 3. Role-based Redirection
       if (data.user && data.user.is_superuser) {

@@ -74,9 +74,9 @@ export const Navbar = () => {
                 {link.name}
               </a>
             ))}
-            <button className="navbar__btn" style={{ background: '#22d3ee', color: '#000', border: 'none' }}>
+            <a href="/signup"><button className="navbar__btn" style={{ background: '#22d3ee', color: '#000', border: 'none' }}>
               Get Started
-            </button>
+            </button></a>
           </div>
         </div>
       )}

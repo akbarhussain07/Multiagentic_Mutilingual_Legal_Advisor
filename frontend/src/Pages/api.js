@@ -50,6 +50,27 @@ export const login = async (credentials) => {
   return data; // Contains token and user info
 };
 
+
+export const updateUserProfile = async (userId, editData) => {
+    const response = await fetch(`${API_BASE_URL}/accounts/${userId}/update/`, {
+        method: 'PUT',
+        headers:getHeaders(),
+        body: JSON.stringify(editData),
+    }); 
+    if (!response.ok) throw new Error('Update failed on the server');
+    return response.json();
+};
+
+// Delete any user by it's userId
+export const deleteUserProfile = async (userId) => {
+    const response = await fetch(`${API_BASE_URL}/accounts/${userId}/delete/`,{
+        method: 'DELETE',
+        headers:getHeaders(),
+    });
+    if (!response.ok) throw new Error('Delete Failed');
+    return true;
+};
+
 // Check backend health status
 export const checkHealth = async () => {
   try {

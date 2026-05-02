@@ -33,18 +33,18 @@ class RAGService:
         try:
             # Initialize embeddings 
             logger.info("Loading embeddings model...")
-            # self.embeddings = HuggingFaceEmbeddings(
-            #     model_name="sentence-transformers/all-mpnet-base-v2"
-            # )
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-mpnet-base-v2"
+            )
 
             # Multilingual Embedding Model 
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name="intfloat/multilingual-e5-large",
-                model_kwargs={'device': 'cpu'},  # No 'normalize_embeddings' here
-                encode_kwargs={'normalize_embeddings': True},  # Correct parameter name and placement
-            )
+            # self.embeddings = HuggingFaceEmbeddings(
+            #     model_name="intfloat/multilingual-e5-large",
+            #     model_kwargs={'device': 'cpu'},  # No 'normalize_embeddings' here
+            #     encode_kwargs={'normalize_embeddings': True},  # Correct parameter name and placement
+            # )
             # To this (384 model):
-           # self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            # self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             
             # Neo4j connection details
             self.url = os.getenv("NEO4J_URL")
@@ -107,8 +107,17 @@ class RAGService:
             )
             # Initialize prompt template
             self.prompt = PromptTemplate(
-               template="""
-                          You are assistance provide answers from giving context accurately if there is not any answer than say I don't know
+              template="""
+                          You are a legal assistant for Pakistani Law. 
+      
+                          ### OBJECTIVE
+                          Your goal is to answer questions based ONLY on the provided Context.
+
+                          ### CONSTRAINTS
+                            1. **Language:** If the question is not in English, say: "Please enter your query in English."
+                            2. **Off-Topic / Personalities:** If the question is about celebrities, politicians (like Donald Trump), or general knowledge NOT found in the context, reply: "I don't have enough information in the provided context to answer this question accurately. Please ask me about Pakistani law."
+                            3. **Greetings:** If the user just says "Hi" or "Hello" with no other question, reply: "Hello! How can I assist you with Pakistani law today?"
+                            4. **Legal Answers:** If the question is legal and in the context, provide a concise answer with specific references to Sections/Articles.
                     Context: {context}
 
                     Question: {question}
@@ -244,3 +253,73 @@ class RAGService:
                 "documents_loaded": False,
                 "message": str(e)
             }
+
+
+
+# Multilingual Approach with memory 
+
+# import os
+# import numpy as np
+# from langchain_groq import ChatGroq
+# from langchain_huggingface import HuggingFaceEmbeddings
+# from langchain_neo4j import Neo4jVector
+# from dotenv import load_dotenv
+
+# class RAGService:
+#     def __init__(self):
+#         load_dotenv()
+#         self.embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
+#         self.model = ChatGroq(model="llama-3.1-8b-instant", temperature=0.3)
+        
+#         # Semantic Memory Storage[cite: 1]
+#         self.conversation_history = []
+#         self.memory_embeddings = []
+        
+#         self.vector_store = Neo4jVector(
+#             embedding=self.embeddings,
+#             url=os.getenv("NEO4J_URL"),
+#             username=os.getenv("NEO4J_USERNAME"),
+#             password=os.getenv("NEO4J_PASSWORD"),
+#             index_name="vector"
+#         )
+
+#     def store_memory(self, question, answer):
+#         """Stores interaction for semantic context[cite: 1]."""
+#         text = f"Q: {question} A: {answer}"
+#         emb = self.embeddings.embed_query(text)
+#         self.conversation_history.append(text)
+#         self.memory_embeddings.append(emb)
+
+#     def retrieve_memory(self, query):
+#         """Finds the most relevant past interaction[cite: 1]."""
+#         if not self.memory_embeddings: return ""
+#         q_emb = self.embeddings.embed_query(query)
+#         scores = [np.dot(q_emb, m_emb) for m_emb in self.memory_embeddings]
+#         best_idx = np.argmax(scores)
+#         return self.conversation_history[best_idx]
+
+#     def rewrite_query(self, question):
+#         """Uses memory to turn a follow-up into a standalone question[cite: 1]."""
+#         memory_context = self.retrieve_memory(question)
+#         if not memory_context: return question
+        
+#         prompt = f"Rewrite to a standalone query.\nHistory: {memory_context}\nFollow-up: {question}"
+#         response = self.model.invoke(prompt)
+#         return response.content
+
+#     def query(self, question):
+#         # 1. Context-aware Rewriting[cite: 1]
+#         standalone_q = self.rewrite_query(question)
+        
+#         # 2. Retrieve relevant documents[cite: 3]
+#         docs = self.vector_store.similarity_search(standalone_q, k=3)
+#         context = "\n".join([d.page_content for d in docs])
+        
+#         # 3. Generate Multilingual Answer[cite: 1]
+#         prompt = f"Context: {context}\nQuestion: {question}\nRules: Answer in same language. Only use context."
+#         answer = self.model.invoke(prompt).content
+        
+#         # 4. Save to Memory[cite: 1]
+#         self.store_memory(question, answer)
+        
+#         return {"answer": answer}

@@ -496,3 +496,61 @@
   flex: 1;
 }
 
+/* Layout for the bot response container */
+.bot-dual-container.both {
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* Side by side */
+  gap: 20px;
+  width: 100%;
+}
+
+.bot-dual-container.pakistan, 
+.bot-dual-container.islamic {
+  display: block;
+  max-width: 80%;
+}
+
+.law-panel {
+  display: flex;
+  flex-direction: column;
+  border: none !important;
+}
+
+.panel-header {
+  font-size: 0.75rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+  color: #1e3a8a; /* Blue for Civil */
+}
+
+.islamic .panel-header {
+  color: #065f46; /* Green for Islamic */
+}
+
+
+/* Toggle Buttons Styling */
+.view-toggle-container {
+  display: flex;
+  background: #f3f4f6;
+  padding: 4px;
+  border-radius: 8px;
+  margin: 0 15px;
+}
+
+.view-toggle-container button {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  border-radius: 6px;
+  transition: 0.3s;
+}
+
+.view-toggle-container button.active {
+  background: white;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  color: #1e3a8a;
+  font-weight: 600;
+}

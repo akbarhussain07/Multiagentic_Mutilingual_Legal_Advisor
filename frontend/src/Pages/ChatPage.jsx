@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Send, Menu, Plus, LogOut, User, Scale, MessageSquare, Loader2, AlertCircle, CheckCircle, Trash2 } from 'lucide-react';
 import './ChatPage.css';
-import { queryLegalQuestion, checkHealth, getUserSessions, getSessionMessages, deleteChatSession } from './api';
+import { queryLegalQuestion, checkHealth, getUserSessions, getSessionMessages, deleteChatSession , updateUserProfile, deleteUserProfile} from './api';
 
 export default function ChatPage() {
   const [message, setMessage] = useState('');
+  
   
   // 'chats' now only stores the Sidebar list (id, title)
   const [chats, setChats] = useState([]); 
@@ -14,6 +16,9 @@ export default function ChatPage() {
   
   // 'messages' stores the content of the CURRENT active chat
   const [messages, setMessages] = useState([]);
+
+  // 'pakistan', 'islamic', or 'both'
+  const [viewMode, setViewMode] = useState('both');
   
   // 'sidebarOpen' ,manages the side bar open or close
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -23,21 +28,24 @@ export default function ChatPage() {
   const messagesEndRef = useRef(null);
   const [username, setUsername] = useState('Guest');
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [email, setEmail] = useState(localStorage.getItem('userEmail') || '');
   const [editData, setEditData] = useState({
     username: localStorage.getItem('chatUser') || '',
-    email: '',
+    email: localStorage.getItem('userEmail') || '',
     password: ''
   });
-
+  const navigate = useNavigate();
   // Initial Setup: Check Auth, Health, and Load Sidebar History
   useEffect(() => {
     const storedName = localStorage.getItem('chatUser');
+    const storedEmail = localStorage.getItem('userEmail');
     const token = localStorage.getItem('authToken');
 
     if (!token) {
       window.location.href = '/login';
     } else {
       setUsername(storedName || 'User');
+      setEmail(storedEmail || '');
       checkBackendHealth();
       loadSidebarHistory();
     }
@@ -198,38 +206,59 @@ export default function ChatPage() {
   const handleLogout = () => {
     localStorage.removeItem('authToken');
     localStorage.removeItem('chatUser');
+    localStorage.removeItem('chatEmail');
     window.location.href = '/login';
   };
 
 
 
 
-  const handleDeleteAccount = async () => {
-  const confirm = window.confirm("Are you sure? This will delete your account and all chat history permanently.");
-  if (confirm) {
-    try {
-      // Use the individual API function we built
-      await api.deleteUser(currentUserId); 
-      localStorage.clear();
-      navigate('/login');
-    } catch (err) {
-      alert("Could not delete account.");
+const handleDeleteAccount = async () => {
+    const confirm = window.confirm("Are you sure? This will delete your account and all chat history permanently.");
+    if (confirm) {
+      try {
+        const userId = localStorage.getItem('userId');
+        if (!userId) {
+            alert("User ID not found. Please log in again.");
+            return;
+        }
+
+        await deleteUserProfile(userId);
+        
+        localStorage.clear(); 
+        navigate('/login');  
+      } catch (err) {
+        console.error("Delete Error:", err);
+        alert("Could not delete account.");
+      }
     }
-  }
-};
+  };
 
 const handleUpdateAccount = async (e) => {
   e.preventDefault();
   try {
-    const updated = await api.updateUser(currentUserId, editData);
-    localStorage.setItem('chatUser', updated.first); // Sync the sidebar name
+    const userId = localStorage.getItem('userId'); 
+    const updated = await updateUserProfile(userId, editData); 
+    
+    // Update local state and storage with the correct keys returned by backend
+    setUsername(updated.username); 
+    localStorage.setItem('chatUser', updated.username);
+    setEmail(updated.email);
+    localStorage.setItem('chatEmail', updated.email); 
+
+    setEditData({
+      ...editData,
+      username: updated.username,
+      email: updated.email,
+      password: '' 
+    });
+    
     setIsProfileModalOpen(false);
     alert("Profile Updated!");
   } catch (err) {
     alert("Update failed.");
   }
 };
-
 
   return (
     <div className="chat-page-container">
@@ -380,6 +409,24 @@ const handleUpdateAccount = async (e) => {
               </>
             )}
           </div>
+
+
+          <div className="view-toggle-container">
+  <button 
+    className={viewMode === 'pakistan' ? 'active' : ''} 
+    onClick={() => setViewMode('pakistan')}
+  >Pakistani</button>
+  
+  <button 
+    className={viewMode === 'both' ? 'active' : ''} 
+    onClick={() => setViewMode('both')}
+  >Both</button>
+  
+  <button 
+    className={viewMode === 'islamic' ? 'active' : ''} 
+    onClick={() => setViewMode('islamic')}
+  >Islamic</button>
+</div>
         </header>
 
         {/* Chat Area */}
@@ -396,19 +443,90 @@ const handleUpdateAccount = async (e) => {
               </p>
             </div>
           ) : (
+            // <div className="messages-container">
+            //   {messages.map((msg, idx) => (
+            //     <div key={idx} className={`message-wrapper ${msg.type}`}>
+            //       {msg.type === 'bot' && (
+            //         <div className="bot-avatar">
+            //           <Scale size={20} color="white" />
+            //         </div>
+            //       )}
+            //       <div className={`message-bubble ${msg.type}`}>
+            //         <p className="message-text">{msg.content}</p>
+                    
+            //         {/* Render Sources if available */}
+            //         {msg.sources && msg.sources.length > 0 && (
+            //           <div className="message-sources">
+            //             <strong>Sources:</strong>
+            //             {msg.sources.map((source, sIdx) => (
+            //               <div key={sIdx} className="source-item">
+            //                 • {source.content || source}
+            //               </div>
+            //             ))}
+            //           </div>
+            //         )}
+                    
+            //         <span className={`message-time ${msg.type}`}>
+            //           {msg.timestamp}
+            //         </span>
+            //       </div>
+            //       {msg.type === 'user' && (
+            //         <div className="user-avatar-msg">
+            //           <User size={20} color="#666" />
+            //         </div>
+            //       )}
+            //     </div>
+            //   ))}
+              
+            //   {isLoading && (
+            //     <div className="message-wrapper bot">
+            //       <div className="bot-avatar">
+            //         <Scale size={20} color="white" />
+            //       </div>
+            //       <div className="message-bubble bot">
+            //         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            //           <Loader2 size={16} className="spinner" />
+            //           <span>Analyzing legal documents...</span>
+            //         </div>
+            //       </div>
+            //     </div>
+            //   )}
+              
+            //   <div ref={messagesEndRef} />
+            // </div>
             <div className="messages-container">
-              {messages.map((msg, idx) => (
-                <div key={idx} className={`message-wrapper ${msg.type}`}>
-                  {msg.type === 'bot' && (
+  {messages.map((msg, idx) => (
+    <div key={idx} className={`message-row ${msg.type}`}>
+      
+      {/* User messages stay full width */}
+      {msg.type === 'user' ? (
+        <div className="message-wrapper user">
+          <div className="message-bubble user">
+            <p className="message-text">{msg.content}</p>
+            <span className="message-time user">{msg.timestamp}</span>
+          </div>
+          <div className="user-avatar-msg"><User size={20} color="#666" /></div>
+        </div>
+      ) : (
+        /* Bot Message - Splitting Logic */
+        <div className={`bot-dual-container ${viewMode}`}>
+           {/* {msg.type === 'bot' && (
                     <div className="bot-avatar">
                       <Scale size={20} color="white" />
                     </div>
-                  )}
-                  <div className={`message-bubble ${msg.type}`}>
-                    <p className="message-text">{msg.content}</p>
-                    
-                    {/* Render Sources if available */}
-                    {msg.sources && msg.sources.length > 0 && (
+                  )} */}
+          {/* Pakistani Law Panel */}
+          
+          {(viewMode === 'pakistan' || viewMode === 'both') && (
+            <div className="law-panel pakistan">
+              
+              <div className="panel-header">Pakistani Civil Law</div>
+              
+              <div className="message-bubble bot">
+                
+                {/* Assuming your backend sends an object with both keys */}
+                <p className="message-text">{msg.pakistanContent || msg.content}</p>
+                 {msg.sources && msg.sources.length > 0 && (
                       <div className="message-sources">
                         <strong>Sources:</strong>
                         {msg.sources.map((source, sIdx) => (
@@ -422,31 +540,25 @@ const handleUpdateAccount = async (e) => {
                     <span className={`message-time ${msg.type}`}>
                       {msg.timestamp}
                     </span>
-                  </div>
-                  {msg.type === 'user' && (
-                    <div className="user-avatar-msg">
-                      <User size={20} color="#666" />
-                    </div>
-                  )}
-                </div>
-              ))}
-              
-              {isLoading && (
-                <div className="message-wrapper bot">
-                  <div className="bot-avatar">
-                    <Scale size={20} color="white" />
-                  </div>
-                  <div className="message-bubble bot">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Loader2 size={16} className="spinner" />
-                      <span>Analyzing legal documents...</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-              
-              <div ref={messagesEndRef} />
+              </div>
             </div>
+          )}
+
+          {/* Islamic Law Panel */}
+          {(viewMode === 'islamic' || viewMode === 'both') && (
+            <div className="law-panel islamic">
+              <div className="panel-header">Islamic Sharia Law</div>
+              <div className="message-bubble bot sharia">
+                <p className="message-text">{msg.islamicContent || "Analysis not available for this query."}</p>
+                {/* ... render sources ... */}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  ))}
+</div>
           )}
         </section>
 
@@ -471,11 +583,7 @@ const handleUpdateAccount = async (e) => {
                 {isLoading ? <Loader2 size={20} className="spinner" /> : <Send size={20} />}
               </button>
             </div>
-            {/* {backendStatus === 'disconnected' && (
-              <p className="server-status">
-                Backend server is offline. Please start Django server on http://localhost:8000
-              </p>
-            )} */}
+      
           </div>
         </footer>
       </main>
