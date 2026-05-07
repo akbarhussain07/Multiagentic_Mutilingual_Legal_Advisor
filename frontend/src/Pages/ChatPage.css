@@ -508,6 +508,7 @@
 .bot-dual-container.islamic {
   display: block;
   max-width: 80%;
+  border: none !important;
 }
 
 .law-panel {

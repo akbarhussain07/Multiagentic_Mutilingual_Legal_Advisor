@@ -1,13 +1,9 @@
 /* Auth Container */
 .auth-container {
-  /* min-height: 100vh;
-  height: 100vh; */
-  /* background: linear-gradient(135deg, #0a1628 0%, #0f2847 100%); */
   display: flex;
   align-items: center;
   justify-content: center;
   font-family: system-ui, -apple-system, sans-serif;
-  /* padding: 20px; */
   overflow: hidden;
 }
 
@@ -28,7 +24,7 @@
 
 /* Signup Card - Slightly More Compact */
 .signup-card {
-  margin-top: 30px;
+  margin-top: 20px;
 }
 .forgot-card{
   margin-top: 50px;
@@ -339,6 +335,35 @@
     display: flex;
     justify-content: center;
     margin-top: 10px;
+}
+
+.strength-meter-container {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.strength-meter-bar {
+  flex-grow: 1;
+  height: 4px;
+  background-color: rgba(255, 255, 255, 0.1); /* Dark background for the track */
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.strength-meter-fill {
+  height: 100%;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.strength-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  min-width: 45px;
+  text-align: right;
 }
 
 /* Animations */
