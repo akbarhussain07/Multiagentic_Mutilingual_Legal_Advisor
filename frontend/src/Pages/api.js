@@ -94,13 +94,14 @@ export const checkHealth = async () => {
 
 
 
-export const queryLegalQuestion = async (question, sessionId = null) => {
+export const queryLegalQuestion = async (question, sessionId = null, viewMode) => {
     const response = await fetch(`${API_BASE_URL}/api/query/`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ 
             question, 
-            session_id: sessionId // Send null for new chat, ID for existing
+            session_id: sessionId, // Send null for new chat, ID for existing
+            view_mode: viewMode
         }),
     });
     if (!response.ok) throw new Error('Query failed');

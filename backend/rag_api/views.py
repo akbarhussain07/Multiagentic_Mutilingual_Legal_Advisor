@@ -100,17 +100,18 @@ def query_rag(request):
         user = request.user
         question = request.data.get('question', '')
         session_id = request.data.get('session_id') # Frontend will send this if continuing a chat
+        view_mode = request.data.get('view_mode', 'both')
 
         if not question:
             return Response({'error': 'Question is required'}, status=400)
 
         # Step A: Get or Create Session
-        if session_id:
+        if session_id and session_id != 'new':
             # Continue existing session
             session = get_object_or_404(ChatSession, session_id=session_id, user=user)
         else:
             # Start new session (Title = first 50 chars of question)
-            title = question[:50] + "..." if len(question) > 50 else question
+            title = question[:25] + "..." if len(question) > 25 else question
             session = ChatSession.objects.create(user=user, title=title)
 
         # Step B: Save User Message to DB
@@ -121,26 +122,44 @@ def query_rag(request):
         )
            
 
+        # # Step C: Get AI Response
+        # result = rag_service.query(question, view_mode=view_mode)
+        # answer = result.get('answer', 'No answer found.')
+        # sources = result.get('sources', [])
+        # # print(sources)
+        # # Step D: Save AI Message to DB
+        # ChatMessage.objects.create(
+        #     session=session,
+        #     role='assistant',
+        #     content=answer
+        # )
+
+        # # Step E: Return Response with Session ID (Critical for frontend tracking)
+        # return Response({
+        #     'session_id': session.session_id,
+        #     'title': session.title,
+        #     'answer': answer,
+        #     'sources': sources
+        # })
+    
+
+
         # Step C: Get AI Response
-        result = rag_service.query(question)
-        answer = result.get('answer', 'No answer found.')
-        sources = result.get('sources', [])
-        # print(sources)
-        # Step D: Save AI Message to DB
-        ChatMessage.objects.create(
-            session=session,
-            role='assistant',
-            content=answer
-        )
+        result = rag_service.query(question, view_mode=view_mode)
 
-        # Step E: Return Response with Session ID (Critical for frontend tracking)
-        return Response({
-            'session_id': session.session_id,
-            'title': session.title,
-            'answer': answer,
-            'sources': sources
-        })
+        response_data = {
+        'session_id': session.session_id,
+        'sources': result.get('sources', []),
+        'pakistanContent': result.get('pakistanContent'),
+        'islamicContent': result.get('islamicContent'),
+        'answer': result.get('answer') # For general view fallback
+    }
 
+        # Save to history (combined for the database)
+        combined_content = f"PAKISTANI: {response_data['pakistanContent']}\nISLAMIC: {response_data['islamicContent']}"
+        ChatMessage.objects.create(session=session, role='assistant', content=combined_content)
+
+        return Response(response_data)
     except Exception as e:
         logger.error(f"Error in query_rag: {str(e)}")
         return Response({'error': str(e)}, status=500)

@@ -256,70 +256,283 @@ class RAGService:
 
 
 
-# Multilingual Approach with memory 
 
-# import os
-# import numpy as np
-# from langchain_groq import ChatGroq
-# from langchain_huggingface import HuggingFaceEmbeddings
-# from langchain_neo4j import Neo4jVector
-# from dotenv import load_dotenv
 
-# class RAGService:
-#     def __init__(self):
-#         load_dotenv()
-#         self.embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
-#         self.model = ChatGroq(model="llama-3.1-8b-instant", temperature=0.3)
-        
-#         # Semantic Memory Storage[cite: 1]
-#         self.conversation_history = []
-#         self.memory_embeddings = []
-        
-#         self.vector_store = Neo4jVector(
-#             embedding=self.embeddings,
-#             url=os.getenv("NEO4J_URL"),
-#             username=os.getenv("NEO4J_USERNAME"),
-#             password=os.getenv("NEO4J_PASSWORD"),
-#             index_name="vector"
-#         )
 
-#     def store_memory(self, question, answer):
-#         """Stores interaction for semantic context[cite: 1]."""
-#         text = f"Q: {question} A: {answer}"
-#         emb = self.embeddings.embed_query(text)
-#         self.conversation_history.append(text)
-#         self.memory_embeddings.append(emb)
 
-#     def retrieve_memory(self, query):
-#         """Finds the most relevant past interaction[cite: 1]."""
-#         if not self.memory_embeddings: return ""
-#         q_emb = self.embeddings.embed_query(query)
-#         scores = [np.dot(q_emb, m_emb) for m_emb in self.memory_embeddings]
-#         best_idx = np.argmax(scores)
-#         return self.conversation_history[best_idx]
 
-#     def rewrite_query(self, question):
-#         """Uses memory to turn a follow-up into a standalone question[cite: 1]."""
-#         memory_context = self.retrieve_memory(question)
-#         if not memory_context: return question
-        
-#         prompt = f"Rewrite to a standalone query.\nHistory: {memory_context}\nFollow-up: {question}"
-#         response = self.model.invoke(prompt)
-#         return response.content
 
-#     def query(self, question):
-#         # 1. Context-aware Rewriting[cite: 1]
-#         standalone_q = self.rewrite_query(question)
+
+
+
+
+
+
+
+import os
+import re
+import logging
+from typing import List, Dict, Any
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.prompts import PromptTemplate
+from langchain_groq import ChatGroq
+from langchain_neo4j import Neo4jVector
+from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
+
+class RAGService:
+    """
+    Singleton RAG service that connects to Neo4j vector store
+    and provides query functionality using HuggingFace models
+    """
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(RAGService, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+            
+        logger.info("Initializing RAG Service...")
         
-#         # 2. Retrieve relevant documents[cite: 3]
-#         docs = self.vector_store.similarity_search(standalone_q, k=3)
-#         context = "\n".join([d.page_content for d in docs])
+        # Load environment variables
+        load_dotenv()
         
-#         # 3. Generate Multilingual Answer[cite: 1]
-#         prompt = f"Context: {context}\nQuestion: {question}\nRules: Answer in same language. Only use context."
-#         answer = self.model.invoke(prompt).content
+        try:
+            # Initialize embeddings 
+            logger.info("Loading embeddings model...")
+            # self.embeddings = HuggingFaceEmbeddings(
+            #     model_name="sentence-transformers/all-mpnet-base-v2"
+            # )
+
+            # Multilingual Embedding Model 
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="intfloat/multilingual-e5-large",
+                model_kwargs={'device': 'cpu'},  # No 'normalize_embeddings' here
+                encode_kwargs={'normalize_embeddings': True},  # Correct parameter name and placement
+            )
+            # To this (384 model):
+            # self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            
+            # Neo4j connection details
+            self.url = os.getenv("NEO4J_URL")
+            self.username = os.getenv("NEO4J_USERNAME")
+            self.password = os.getenv("NEO4J_PASSWORD")
+            self.database = os.getenv("NEO4J_DATABASE", "neo4j")
+            
+            if not all([self.url, self.username, self.password]):
+                raise ValueError("Neo4j credentials not found in environment variables")
+            
+            # Connect to existing Neo4j vector store
+            logger.info("Connecting to Neo4j vector store...")
+            self.vector_store = Neo4jVector(
+                embedding=self.embeddings,
+                url=self.url,
+                username=self.username,
+                password=self.password,
+                database=self.database,
+                index_name="vector",
+                node_label="Chunk",
+                text_node_property="text",
+                embedding_node_property="embedding"
+            )
+            
+            # Initialize retriever
+            self.retriever = self.vector_store.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": 5}  # Retrieve top 5 most similar documents
+            )
+            logger.info("Retriever initialized with k=5")
+            
+            # Initialize LLM with explicit parameters (not in model_kwargs)
+            # hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+            # if not hf_token:
+            #     raise ValueError("HuggingFace API token not found in environment variables")
+            
+            # logger.info("Initialiing HuggingFace LLM...")
+            # llm = HuggingFaceEndpoint(
+            #     repo_id="HuggingFaceH4/zephyr-7b-beta",
+            #     task="text-generation",
+            #     huggingfacehub_api_token=hf_token,
+            #     max_new_tokens=512,  # Explicit parameter
+            #     temperature=0.7,      # Explicit parameter
+            # )
+            
+            # self.model = ChatHuggingFace(llm=llm)
+
+
+            groq_api = os.getenv("GROQ_API_KEY")
+            if not groq_api:
+                # The exception below will prevent self.model from being created
+                raise ValueError("GROQ API token not found in environment variables")
+            
+            logger.info("Initializing GROQ LLM...")
+
+            # ChatGroq instance 
+            self.model = ChatGroq(
+                model="llama-3.1-8b-instant",
+                temperature=0.3
+            )
+            # Initialize prompt template
+            # self.prompt = PromptTemplate(
+            # template="""
+            #     You are an expert Legal Assistant specializing in both Pakistani Civil Law and Islamic Sharia Law.
+
+            #     ### CONTEXT FROM DATABASE
+            #     {context}
+
+            #     ### INSTRUCTIONS
+            #     1. Use ONLY the provided context to answer. 
+            #     2. If the context is in Arabic (Hadith), translate the core meaning but keep the key Arabic terms.
+            #     3. If the user asks about Pakistani law, cite specific Sections/Acts found in the context.
+            #     4. If the user asks about Islamic law, cite the Source/Book title provided.
+            #     5. If the answer is not in the context, say: "I'm sorry, my current database does not contain specific legal details for this query."
+                
+            #     Question: {question}
+            #     Answer:""",
+            #    input_variables=['context', 'question']
+            # )
+
+
+            self.prompt = PromptTemplate(
+    template="""
+    You are an expert Legal Consultant. Use the following context to provide a detailed legal analysis.
+
+    ### LEGAL CONTEXT
+    {context}
+
+    ### USER QUESTION
+    {question}
+
+    ### INSTRUCTIONS
+    - If the context mentions specific Acts (like Pakistan Penal Code 1860) or Sections, cite them clearly.
+    - If providing an Islamic perspective based on the context, reference the source.
+    - If the context is sufficient, provide a helpful summary.
+    - If you truly cannot find the answer, explain what information is missing.
+
+    Answer:""",
+    input_variables=['context', 'question']
+)
+
+          
+            
+            self._initialized = True
+            logger.info("Multilingual RAG Service Ready!")
+            
+        except Exception as e:
+            logger.error(f"Error initializing RAG Service: {str(e)}")
+            raise
+    
+   
+    def query(self, question: str, view_mode: str = "both") -> dict:
+        try:
+            # logic for "Both" mode
+            if view_mode == "both":
+                # 1. Retrieve Pakistani Context
+                pak_docs = self.vector_store.similarity_search(question, k=3, filter={"law_type": "Pakistani"})
+                # 2. Retrieve Islamic Context
+                isl_docs = self.vector_store.similarity_search(question, k=3, filter={"law_type": "Islamic"})
+
+                # 3. Generate answers for both
+                pak_answer = self._generate_specialized_answer(question, pak_docs, "Pakistani Civil Law")
+                isl_answer = self._generate_specialized_answer(question, isl_docs, "Islamic Sharia Law")
+
+                return {
+                    "pakistanContent": pak_answer,
+                    "islamicContent": isl_answer,
+                    "sources": self._format_sources(pak_docs + isl_docs),
+                    "success": True
+                }
+            
+            # Logic for single view (pakistan or islamic)
+            else:
+                search_filter = {"law_type": "Pakistani"} if view_mode == "pakistan" else {"law_type": "Islamic"}
+                docs = self.vector_store.similarity_search(question, k=5, filter=search_filter)
+                
+                context_text = "\n\n".join([d.page_content for d in docs])
+                final_prompt = self.prompt.format(context=context_text, question=question)
+                response = self.model.invoke(final_prompt)
+
+                # Return the key the frontend expects based on view_mode
+                return {
+                    "answer": response.content,
+                    "pakistanContent": response.content if view_mode == "pakistan" else None,
+                    "islamicContent": response.content if view_mode == "islamic" else None,
+                    "sources": self._format_sources(docs),
+                    "success": True
+                }
+                
+        except Exception as e:
+            logger.error(f"Query Error: {str(e)}")
+            return {"answer": f"System Error: {str(e)}", "success": False}
+
+    # Helper to keep the code clean
+    def _format_sources(self, docs):
+        return [{
+            "content": d.page_content[:200] + "...",
+            "title": d.metadata.get('title', 'Unknown'),
+            "law_type": d.metadata.get('law_type', 'General'),
+            "page": d.metadata.get('page', 'N/A')
+        } for d in docs]
+
+    def _generate_specialized_answer(self, question, docs, law_type_label):
+        if not docs:
+            return f"No specific information found in the {law_type_label} database."
+        context = "\n\n".join([d.page_content for d in docs])
+        prompt = self.prompt.format(context=context, question=question)
+        return self.model.invoke(prompt).content
+
+
+    def get_similar_questions(self, question: str, k: int = 3) -> list:
+        """
+        Get similar document chunks based on semantic similarity
+        Useful for suggestions or exploring related content
         
-#         # 4. Save to Memory[cite: 1]
-#         self.store_memory(question, answer)
+        Args:
+            question: The user's question
+            k: Number of similar documents to retrieve
+            
+        Returns:
+            List of similar document contents
+        """
+        try:
+            docs = self.vector_store.similarity_search(question, k=k)
+            return [
+                doc.page_content[:150] + "..." if len(doc.page_content) > 150 else doc.page_content
+                for doc in docs
+            ]
+        except Exception as e:
+            logger.error(f"Error getting similar questions: {str(e)}")
+            return []
+    
+    def check_connection(self) -> dict:
+        """
+        Check if Neo4j connection is working and documents are loaded
         
-#         return {"answer": answer}
+        Returns:
+            dict with connection status and document count
+        """
+        try:
+            # Try to perform a simple search
+            test_docs = self.vector_store.similarity_search("test", k=1)
+            return {
+                "connected": True,
+                "documents_loaded": len(test_docs) > 0,
+                "message": "Connection successful"
+            }
+        except Exception as e:
+            logger.error(f"Connection check failed: {str(e)}")
+            return {
+                "connected": False,
+                "documents_loaded": False,
+                "message": str(e)
+            }
+
+
+
+
