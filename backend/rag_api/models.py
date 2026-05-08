@@ -37,7 +37,7 @@ class ChatMessage(models.Model):
         related_name='messages'
     )
     role = models.CharField(max_length=10, choices=ROLE_CHOICES)
-    content = models.TextField()
+    content = models.JSONField()
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:

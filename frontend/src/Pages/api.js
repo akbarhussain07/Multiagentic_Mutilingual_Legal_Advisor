@@ -1,7 +1,7 @@
 // Backend API integration for Django server
 
-const API_BASE_URL = 'http://localhost:8000/';
-// const API_BASE_URL = 'https://2d1zf1zf-8000.inc1.devtunnels.ms/';
+// const API_BASE_URL = 'http://localhost:8000/';
+const API_BASE_URL = 'https://2d1zf1zf-8000.inc1.devtunnels.ms/';
 
 // Helper to get headers with Auth Token
 const getHeaders = () => {

@@ -1,273 +1,3 @@
-from langchain_huggingface import HuggingFaceEmbeddings, ChatHuggingFace, HuggingFaceEndpoint
-from langchain_core.prompts import PromptTemplate
-from langchain_groq import ChatGroq
-from langchain_neo4j import Neo4jVector
-import os
-from dotenv import load_dotenv
-import logging
-
-logger = logging.getLogger(__name__)
-
-class RAGService:
-    """
-    Singleton RAG service that connects to Neo4j vector store
-    and provides query functionality using HuggingFace models
-    """
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(RAGService, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-            
-        logger.info("Initializing RAG Service...")
-        
-        # Load environment variables
-        load_dotenv()
-        
-        try:
-            # Initialize embeddings 
-            logger.info("Loading embeddings model...")
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-mpnet-base-v2"
-            )
-
-            # Multilingual Embedding Model 
-            # self.embeddings = HuggingFaceEmbeddings(
-            #     model_name="intfloat/multilingual-e5-large",
-            #     model_kwargs={'device': 'cpu'},  # No 'normalize_embeddings' here
-            #     encode_kwargs={'normalize_embeddings': True},  # Correct parameter name and placement
-            # )
-            # To this (384 model):
-            # self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-            
-            # Neo4j connection details
-            self.url = os.getenv("NEO4J_URL")
-            self.username = os.getenv("NEO4J_USERNAME")
-            self.password = os.getenv("NEO4J_PASSWORD")
-            self.database = os.getenv("NEO4J_DATABASE", "neo4j")
-            
-            if not all([self.url, self.username, self.password]):
-                raise ValueError("Neo4j credentials not found in environment variables")
-            
-            # Connect to existing Neo4j vector store
-            logger.info("Connecting to Neo4j vector store...")
-            self.vector_store = Neo4jVector(
-                embedding=self.embeddings,
-                url=self.url,
-                username=self.username,
-                password=self.password,
-                database=self.database,
-                index_name="vector",
-                node_label="Document",
-                text_node_property="text",
-                embedding_node_property="embedding"
-            )
-            
-            # Initialize retriever
-            self.retriever = self.vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 5}  # Retrieve top 5 most similar documents
-            )
-            logger.info("Retriever initialized with k=5")
-            
-            # Initialize LLM with explicit parameters (not in model_kwargs)
-            # hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-            # if not hf_token:
-            #     raise ValueError("HuggingFace API token not found in environment variables")
-            
-            # logger.info("Initialiing HuggingFace LLM...")
-            # llm = HuggingFaceEndpoint(
-            #     repo_id="HuggingFaceH4/zephyr-7b-beta",
-            #     task="text-generation",
-            #     huggingfacehub_api_token=hf_token,
-            #     max_new_tokens=512,  # Explicit parameter
-            #     temperature=0.7,      # Explicit parameter
-            # )
-            
-            # self.model = ChatHuggingFace(llm=llm)
-
-
-            groq_api = os.getenv("GROQ_API_KEY")
-            if not groq_api:
-                # The exception below will prevent self.model from being created
-                raise ValueError("GROQ API token not found in environment variables")
-            
-            logger.info("Initializing GROQ LLM...")
-
-            # ChatGroq instance 
-            self.model = ChatGroq(
-                model="llama-3.1-8b-instant",
-                temperature=0.3
-            )
-            # Initialize prompt template
-            self.prompt = PromptTemplate(
-              template="""
-                          You are a legal assistant for Pakistani Law. 
-      
-                          ### OBJECTIVE
-                          Your goal is to answer questions based ONLY on the provided Context.
-
-                          ### CONSTRAINTS
-                            1. **Language:** If the question is not in English, say: "Please enter your query in English."
-                            2. **Off-Topic / Personalities:** If the question is about celebrities, politicians (like Donald Trump), or general knowledge NOT found in the context, reply: "I don't have enough information in the provided context to answer this question accurately. Please ask me about Pakistani law."
-                            3. **Greetings:** If the user just says "Hi" or "Hello" with no other question, reply: "Hello! How can I assist you with Pakistani law today?"
-                            4. **Legal Answers:** If the question is legal and in the context, provide a concise answer with specific references to Sections/Articles.
-                    Context: {context}
-
-                    Question: {question}
-
-                    Answer:""",
-               input_variables=['context', 'question']
-            )
-
-          
-            
-            self._initialized = True
-            logger.info("RAG Service initialized successfully!")
-            
-        except Exception as e:
-            logger.error(f"Error initializing RAG Service: {str(e)}")
-            raise
-    
-   
-    def query(self, question: str) -> dict:
-        try:
-            logger.info(f"Processing query: {question}")
-            
-            # Step 1: Retrieve MANY documents (Top 25)
-            # We fetch more because the top 10 might be just Table of Contents
-            all_docs = self.retriever.invoke(question)
-            
-            # NEW FILTERING LOGIC STARTS HERE 
-            useful_docs = []
-            for doc in all_docs:
-                content = doc.page_content
-                
-                # Filter 1: Skip if it explicitly says "CONTENTS" (Case insensitive)
-                if "CONTENTS" in content.upper():
-                    continue
-
-                # Filter 2: Skip if it looks like a list of sections (e.g., "301. ... 302. ...")
-                # We count how many times a pattern like "123. " appears. 
-                # If it appears more than 3 times, it's likely an index page.
-                import re
-                section_matches = len(re.findall(r'\d+\.\s', content))
-                if section_matches > 3:
-                    continue
-
-                # If it passed the checks, keep it
-                useful_docs.append(doc)
-
-            # Step 3: Take the top 5 BEST docs from the filtered list
-            # If we filtered everything out (rare), fall back to the original top 3.
-            final_docs = useful_docs[:5] if useful_docs else all_docs[:3]
-            
-            logger.info(f"Retrieved {len(all_docs)} docs, filtered down to {len(final_docs)} useful docs")
-
-            # Step 4: Combine context
-            context_text = "\n\n".join(doc.page_content for doc in final_docs)
-            
-            # Step 5: Generate prompt
-            final_prompt = self.prompt.invoke({
-                "context": context_text,
-                "question": question
-            })
-            
-            # Step 6: Get response from LLM
-            logger.info("Generating response from LLM...")
-            response = self.model.invoke(final_prompt)
-            
-            # Extract sources (Only from the docs we actually used)
-            sources = [
-                {
-                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                    "metadata": doc.metadata,
-                    "page": doc.metadata.get('page', 'N/A')
-                }
-                for doc in final_docs
-            ]
-            
-            return {
-                "answer": response.content,
-                "sources": sources,
-                "success": True,
-                "num_sources": len(sources)
-            }
-            
-        except Exception as e:
-            logger.error(f"Error processing query: {str(e)}")
-            return {
-                "answer": f"An error occurred: {str(e)}",
-                "sources": [],
-                "success": False,
-                "error": str(e)
-            }
-    
-    def get_similar_questions(self, question: str, k: int = 3) -> list:
-        """
-        Get similar document chunks based on semantic similarity
-        Useful for suggestions or exploring related content
-        
-        Args:
-            question: The user's question
-            k: Number of similar documents to retrieve
-            
-        Returns:
-            List of similar document contents
-        """
-        try:
-            docs = self.vector_store.similarity_search(question, k=k)
-            return [
-                doc.page_content[:150] + "..." if len(doc.page_content) > 150 else doc.page_content
-                for doc in docs
-            ]
-        except Exception as e:
-            logger.error(f"Error getting similar questions: {str(e)}")
-            return []
-    
-    def check_connection(self) -> dict:
-        """
-        Check if Neo4j connection is working and documents are loaded
-        
-        Returns:
-            dict with connection status and document count
-        """
-        try:
-            # Try to perform a simple search
-            test_docs = self.vector_store.similarity_search("test", k=1)
-            return {
-                "connected": True,
-                "documents_loaded": len(test_docs) > 0,
-                "message": "Connection successful"
-            }
-        except Exception as e:
-            logger.error(f"Connection check failed: {str(e)}")
-            return {
-                "connected": False,
-                "documents_loaded": False,
-                "message": str(e)
-            }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 import os
 import re
@@ -378,47 +108,40 @@ class RAGService:
                 model="llama-3.1-8b-instant",
                 temperature=0.3
             )
-            # Initialize prompt template
-            # self.prompt = PromptTemplate(
-            # template="""
-            #     You are an expert Legal Assistant specializing in both Pakistani Civil Law and Islamic Sharia Law.
-
-            #     ### CONTEXT FROM DATABASE
-            #     {context}
-
-            #     ### INSTRUCTIONS
-            #     1. Use ONLY the provided context to answer. 
-            #     2. If the context is in Arabic (Hadith), translate the core meaning but keep the key Arabic terms.
-            #     3. If the user asks about Pakistani law, cite specific Sections/Acts found in the context.
-            #     4. If the user asks about Islamic law, cite the Source/Book title provided.
-            #     5. If the answer is not in the context, say: "I'm sorry, my current database does not contain specific legal details for this query."
-                
-            #     Question: {question}
-            #     Answer:""",
-            #    input_variables=['context', 'question']
-            # )
-
+            self.condense_prompt = PromptTemplate(
+                template="""Given the following conversation and a follow-up question, rephrase the follow-up question to be a standalone question.
+    
+                Chat History:
+                {chat_history}
+    
+                Follow-up Question: {question}
+    
+                Standalone Question:""",
+                input_variables=['chat_history', 'question']
+            )
 
             self.prompt = PromptTemplate(
-    template="""
-    You are an expert Legal Consultant. Use the following context to provide a detailed legal analysis.
+            template="""
+                You are an expert Legal Assistant specializing in Pakistani Law and Islamic Sharia Law.
 
-    ### LEGAL CONTEXT
-    {context}
+                ### CONTEXT
+                {context}
+ 
+                ### USER QUESTION
+                {question}
 
-    ### USER QUESTION
-    {question}
+                ### STRICT INSTRUCTIONS
+                1. **Greetings:** If the user says "Hi", "Hello", or similar greetings, ONLY reply with: "Hello! I am your Legal Advisor. How can I assist you with Pakistani or Islamic law today?" Do not provide legal analysis or references for simple greetings.
+    
+                2. **Off-Topic Filtering:** If the user asks about celebrities, general knowledge, or anything NOT related to Pakistani or Islamic law, reply ONLY with: "I searched in my documents but I couldn't found. I am a specialized legal assistant. I can only provide information regarding Pakistani Law and Islamic Law. Please ask a legal question."
+    
+                3. **Missing Information:** If the provided context does not contain the answer, say: "I'm sorry, I could not find a specific answer to this in my current legal database." Do not try to make up an answer.
+    
+                4. **References:** Only show citations or references if you are actually providing a legal answer.
 
-    ### INSTRUCTIONS
-    - If the context mentions specific Acts (like Pakistan Penal Code 1860) or Sections, cite them clearly.
-    - If providing an Islamic perspective based on the context, reference the source.
-    - If the context is sufficient, provide a helpful summary.
-    - If you truly cannot find the answer, explain what information is missing.
-
-    Answer:""",
-    input_variables=['context', 'question']
-)
-
+                Answer:""",
+                input_variables=['context', 'question']
+                )
           
             
             self._initialized = True
@@ -429,18 +152,40 @@ class RAGService:
             raise
     
    
-    def query(self, question: str, view_mode: str = "both") -> dict:
+    def query(self, question: str, view_mode: str = "both", chat_history: list =[]) -> dict:
         try:
+            # 1. ADD GREETING CHECK HERE
+            greetings = ["hi", "hello", "hey", "salam", "aalaikum", "assalam"]
+        # Check if the question is just a greeting (usually 1-2 words)
+            if any(greet in question.lower() for greet in greetings) and len(question.split()) < 3:
+               greeting_text = "Hello! I am your Legal Advisor. How can I assist you with Pakistani Law or Islamic Law today?"
+               return {
+                "answer": greeting_text,
+                "pakistanContent": greeting_text if view_mode != "islamic" else None,
+                "islamicContent": greeting_text if view_mode != "pakistan" else None,
+                "sources": [], # Return empty sources for greetings
+                "success": True
+                }
+            
+            if chat_history:
+               history_str = "\n".join(chat_history)
+               condense_input = self.condense_prompt.format(chat_history=history_str, question=question)
+               standalone_question = self.model.invoke(condense_input).content
+               logger.info(f"Rewritten Question: {standalone_question}")
+            else:
+               standalone_question = question
+
+
             # logic for "Both" mode
             if view_mode == "both":
                 # 1. Retrieve Pakistani Context
-                pak_docs = self.vector_store.similarity_search(question, k=3, filter={"law_type": "Pakistani"})
+                pak_docs = self.vector_store.similarity_search(standalone_question, k=3, filter={"law_type": "Pakistani"})
                 # 2. Retrieve Islamic Context
-                isl_docs = self.vector_store.similarity_search(question, k=3, filter={"law_type": "Islamic"})
+                isl_docs = self.vector_store.similarity_search(standalone_question, k=3, filter={"law_type": "Islamic"})
 
                 # 3. Generate answers for both
-                pak_answer = self._generate_specialized_answer(question, pak_docs, "Pakistani Civil Law")
-                isl_answer = self._generate_specialized_answer(question, isl_docs, "Islamic Sharia Law")
+                pak_answer = self._generate_specialized_answer(question, pak_docs, "Pakistani Law", chat_history)
+                isl_answer = self._generate_specialized_answer(question, isl_docs, "Islamic Law", chat_history)
 
                 return {
                     "pakistanContent": pak_answer,
@@ -451,20 +196,20 @@ class RAGService:
             
             # Logic for single view (pakistan or islamic)
             else:
+                law_label = "Pakistani Law" if view_mode == "pakistan" else "Islamic Law"
                 search_filter = {"law_type": "Pakistani"} if view_mode == "pakistan" else {"law_type": "Islamic"}
+            
                 docs = self.vector_store.similarity_search(question, k=5, filter=search_filter)
-                
-                context_text = "\n\n".join([d.page_content for d in docs])
-                final_prompt = self.prompt.format(context=context_text, question=question)
-                response = self.model.invoke(final_prompt)
+            
+                # Use specialized answer to ensure domain-specific instructions are followed
+                answer = self._generate_specialized_answer(question, docs, law_label, chat_history)
 
-                # Return the key the frontend expects based on view_mode
                 return {
-                    "answer": response.content,
-                    "pakistanContent": response.content if view_mode == "pakistan" else None,
-                    "islamicContent": response.content if view_mode == "islamic" else None,
-                    "sources": self._format_sources(docs),
-                    "success": True
+                       "answer": answer,
+                       "pakistanContent": answer if view_mode == "pakistan" else "Information hidden: Pakistani view not selected.",
+                       "islamicContent": answer if view_mode == "islamic" else "Information hidden: Islamic view not selected.",
+                       "sources": self._format_sources(docs),
+                       "success": True
                 }
                 
         except Exception as e:
@@ -480,12 +225,40 @@ class RAGService:
             "page": d.metadata.get('page', 'N/A')
         } for d in docs]
 
-    def _generate_specialized_answer(self, question, docs, law_type_label):
+    def _generate_specialized_answer(self, question, docs, law_type_label, chat_history = []):
+        # Ensure chat_history is a list
+        if chat_history is None:
+            chat_history = []
+        # If no documents were found for this specific law type, do not generate an answer
         if not docs:
-            return f"No specific information found in the {law_type_label} database."
+           return "I'm sorry, I could not find a specific answer to this in the {} database.".format(law_type_label)
+    
         context = "\n\n".join([d.page_content for d in docs])
-        prompt = self.prompt.format(context=context, question=question)
-        return self.model.invoke(prompt).content
+        history_str = "\n".join(chat_history) if chat_history else "No previous conversation."
+
+        # Create a highly specific prompt for the individual panel
+        panel_prompt = f"""
+            You are a legal expert specializing ONLY in {law_type_label}.
+
+            ### RECENT CONVERSATION:
+            {history_str}
+
+            ### CONTEXT FROM {law_type_label} DATABASE:
+            {context}
+    
+            ### QUESTION:
+             {question}
+    
+             ### STRICT INSTRUCTIONS:
+             1. Answer ONLY using the provided {law_type_label} context.
+             2. Do NOT mention other legal systems.
+             3. If the answer is not in the context, say: "No specific information found in the {law_type_label} database."
+             4. CITE specific sections or verses found in the context.
+             5. Using the conversation history and the new context, provide a detailed response.
+
+             Answer:"""
+    
+        return self.model.invoke(panel_prompt).content
 
 
     def get_similar_questions(self, question: str, k: int = 3) -> list:

@@ -400,40 +400,154 @@
 }
 
 /* Responsive Design */
-@media (max-height: 700px) {
+
+/* --- Mobile: up to 480px (small phones) --- */
+@media (max-width: 480px) {
+  .auth-container {
+    align-items: flex-start;
+    padding: 0;
+    min-height: 100vh;
+    min-height: 100dvh; /* Dynamic viewport for mobile browsers */
+  }
+
   .auth-card {
-    padding: 25px 30px;
+    border-radius: 0;               /* Full-width card, no rounded corners on mobile */
+    margin-top: 0;
+    padding: 28px 20px 32px;
+    max-width: 100%;
+    min-height: 100vh;
+    min-height: 100dvh;
+    max-height: none;               /* Remove height cap — let it scroll naturally */
+    box-shadow: none;
+    border: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
   }
-  
-  .signup-card {
-    padding: 20px 30px;
+
+  /* All card variants reset on mobile */
+  .signup-card,
+  .forgot-card,
+  .login-card {
+    margin-top: 0;
+    padding: 28px 20px 32px;
   }
-  
+
+  .auth-logo {
+    margin-bottom: 18px;
+  }
+
+  .logo-text {
+    font-size: 18px;
+  }
+
   .auth-title {
-    font-size: 24px;
+    font-size: 22px;
     margin-bottom: 6px;
   }
-  
+
   .auth-subtitle {
     font-size: 13px;
     margin-bottom: 20px;
   }
-  
+
   .form-group {
     margin-bottom: 14px;
   }
-  
-  .auth-logo {
-    margin-bottom: 20px;
+
+  .form-input {
+    padding: 13px 14px 13px 38px; /* Slightly taller touch target */
+    font-size: 16px;               /* Prevents iOS auto-zoom on input focus */
+  }
+
+  .auth-button {
+    padding: 14px;
+    font-size: 15px;
+  }
+
+  .switch-text {
+    font-size: 13px;
+    margin-top: 16px;
+  }
+
+  .forgot-link {
+    margin-bottom: 16px;
+  }
+
+  /* Popup card stays centered and padded */
+  .popup-card {
+    padding: 24px 20px;
+    width: 88%;
+  }
+
+  .popup-title {
+    font-size: 1.3rem;
+  }
+
+  /* Error message readable on small screens */
+  .error-message {
+    font-size: 13px;
+    padding: 10px 12px;
   }
 }
 
-@media (max-width: 480px) {
-  .auth-card {
-    padding: 30px 25px;
+/* --- Tablet: 481px – 768px --- */
+@media (min-width: 481px) and (max-width: 768px) {
+  .auth-container {
+    padding: 20px 16px;
+    align-items: flex-start;
+    min-height: 100vh;
   }
-  
+
+  .auth-card {
+    padding: 30px 28px;
+    margin-top: 24px;
+    max-height: none;
+    border-radius: 16px;
+  }
+
+  .signup-card,
+  .forgot-card,
+  .login-card {
+    margin-top: 24px;
+  }
+
+  .auth-title {
+    font-size: 24px;
+  }
+
+  .form-input {
+    font-size: 16px; /* Prevent iOS zoom */
+  }
+}
+
+/* --- Short screens (landscape phones) --- */
+@media (max-height: 700px) {
+  .auth-card {
+    padding: 20px 28px;
+    max-height: none;
+    margin-top: 10px;
+  }
+
   .signup-card {
-    padding: 25px 25px;
+    padding: 16px 28px;
+  }
+
+  .auth-title {
+    font-size: 22px;
+    margin-bottom: 5px;
+  }
+
+  .auth-subtitle {
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+
+  .auth-logo {
+    margin-bottom: 16px;
+  }
+
+  .form-group {
+    margin-bottom: 12px;
   }
 }

@@ -19,6 +19,7 @@ const AdminDashboard = () => {
 
   const [showAdminDropdown, setShowAdminDropdown] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   
   const adminData = JSON.parse(localStorage.getItem('user') || '{}');
 
@@ -99,6 +100,11 @@ const AdminDashboard = () => {
   return (
     <div className="shell">   
       <header className="topbar">
+        <button className="topbar-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
         <div className="topbar-logo"><span className="dot"></span>LegalAdvisor · Admin</div>
         
         <div className="topbar-right">
@@ -161,12 +167,17 @@ const AdminDashboard = () => {
         </div>
       )}
 
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <div className="admin-sidebar-overlay visible" onClick={() => setSidebarOpen(false)} />
+      )}
+
       {/* Sidebar */}
-      <nav className="sidebar-main">
+      <nav className={`sidebar-main ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-section">
           <div className="sidebar-label">Overview</div>
-          <button className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>Dashboard</button>
-          <button className={`nav-item ${activeTab === 'users' ? 'active' : ''}`} onClick={() => setActiveTab('users')}>Users</button>
+          <button className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => { setActiveTab('dashboard'); setSidebarOpen(false); }}>Dashboard</button>
+          <button className={`nav-item ${activeTab === 'users' ? 'active' : ''}`} onClick={() => { setActiveTab('users'); setSidebarOpen(false); }}>Users</button>
         </div>
         
         <div style={{ marginTop: 'auto', padding: '20px', textAlign: 'center', fontSize: '11px', color: 'var(--txt-tertiary)' }}>

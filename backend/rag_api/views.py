@@ -87,19 +87,14 @@ def health_check(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
-
-
-
-
-
 #  Query RAG (Modified to Save History) 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated]) # Ensures only logged-in users can save chats
+@permission_classes([IsAuthenticated])
 def query_rag(request):
     try:
         user = request.user
         question = request.data.get('question', '')
-        session_id = request.data.get('session_id') # Frontend will send this if continuing a chat
+        session_id = request.data.get('session_id')
         view_mode = request.data.get('view_mode', 'both')
 
         if not question:
@@ -107,57 +102,51 @@ def query_rag(request):
 
         # Step A: Get or Create Session
         if session_id and session_id != 'new':
-            # Continue existing session
             session = get_object_or_404(ChatSession, session_id=session_id, user=user)
         else:
-            # Start new session (Title = first 50 chars of question)
             title = question[:25] + "..." if len(question) > 25 else question
             session = ChatSession.objects.create(user=user, title=title)
 
-        # Step B: Save User Message to DB
+        # --- NEW: Step B: Fetch Chat History for Memory ---
+        # We fetch the last 4 messages to keep the context without overwhelming the LLM
+        recent_messages = ChatMessage.objects.filter(session=session).order_by('-created_at')[1:5]
+        chat_history = []
+        
+        # We reverse them to get them in chronological order
+        for msg in reversed(recent_messages):
+            role = "User" if msg.role == 'user' else "Assistant"
+            # Since content is a JSONField, we need to handle both strings and dictionaries
+            if isinstance(msg.content, dict):
+                content = msg.content.get('answer') or msg.content.get('pakistanContent') or ""
+            else:
+                content = msg.content
+            chat_history.append(f"{role}: {content}")
+
+        # Step C: Save current User Message to DB
         ChatMessage.objects.create(
             session=session,
             role='user',
             content=question
         )
-           
+  
+        # Step D: Get AI Response (Now passing chat_history)
+        result = rag_service.query(question, view_mode=view_mode, chat_history=chat_history)
 
-        # # Step C: Get AI Response
-        # result = rag_service.query(question, view_mode=view_mode)
-        # answer = result.get('answer', 'No answer found.')
-        # sources = result.get('sources', [])
-        # # print(sources)
-        # # Step D: Save AI Message to DB
-        # ChatMessage.objects.create(
-        #     session=session,
-        #     role='assistant',
-        #     content=answer
-        # )
-
-        # # Step E: Return Response with Session ID (Critical for frontend tracking)
-        # return Response({
-        #     'session_id': session.session_id,
-        #     'title': session.title,
-        #     'answer': answer,
-        #     'sources': sources
-        # })
-    
-
-
-        # Step C: Get AI Response
-        result = rag_service.query(question, view_mode=view_mode)
-
+        # Step E: Structure the AI Response for Storage
         response_data = {
-        'session_id': session.session_id,
-        'sources': result.get('sources', []),
-        'pakistanContent': result.get('pakistanContent'),
-        'islamicContent': result.get('islamicContent'),
-        'answer': result.get('answer') # For general view fallback
-    }
+            'session_id': str(session.session_id),
+            'sources': result.get('sources', []),
+            'pakistanContent': result.get('pakistanContent'),
+            'islamicContent': result.get('islamicContent'),
+            'answer': result.get('answer') 
+        }
 
-        # Save to history (combined for the database)
-        combined_content = f"PAKISTANI: {response_data['pakistanContent']}\nISLAMIC: {response_data['islamicContent']}"
-        ChatMessage.objects.create(session=session, role='assistant', content=combined_content)
+        # Step F: Save Structured JSON to History
+        ChatMessage.objects.create(
+            session=session, 
+            role='assistant', 
+            content=response_data 
+        )
 
         return Response(response_data)
     except Exception as e:
@@ -182,29 +171,39 @@ def get_user_sessions(request):
     except Exception as e:
         return Response({'error': str(e)}, status=500)
 
+
 # Get Messages for a Specific Session (For Loading Chat) 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_session_messages(request, session_id):
-    """Fetch all messages for a specific session ID"""
+    """Fetch all messages for a specific session ID and unpack JSON content"""
     try:
         session = get_object_or_404(ChatSession, session_id=session_id, user=request.user)
         messages = ChatMessage.objects.filter(session=session).order_by('created_at')
         
-        data = [
-            {
-                'type': 'user' if m.role == 'user' else 'bot', # Mapped to  React 'type'
-                'content': m.content,
-                'timestamp': m.created_at.strftime("%H:%M") # Format time
-            } for m in messages
-        ]
+        data = []
+        for m in messages:
+            if m.role == 'user':
+                data.append({
+                    'type': 'user',
+                    'content': m.content, # Just the stored string
+                    'timestamp': m.created_at.strftime("%H:%M")
+                })
+            else:
+                # Unpack the assistant's JSON dictionary into the response
+                data.append({
+                    'type': 'bot',
+                    'pakistanContent': m.content.get('pakistanContent'),
+                    'islamicContent': m.content.get('islamicContent'),
+                    'answer': m.content.get('answer'),
+                    'sources': m.content.get('sources', []),
+                    'timestamp': m.created_at.strftime("%H:%M")
+                })
+        
         return Response(data)
     except Exception as e:
         return Response({'error': str(e)}, status=500)
     
-
-
-
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
