@@ -12,4 +12,7 @@ urlpatterns = [
 
     #Helth to check is neo4j database connected or not
     path('health/', views.health_check, name='health_check'),
+
+    # Global App Rating
+    path('rate-app/', views.rate_app, name='rate_app'),
 ]

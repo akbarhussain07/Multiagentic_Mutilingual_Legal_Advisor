@@ -756,3 +756,59 @@
     background-color: rgba(239, 68, 68, 0.1);
   }
 }
+
+
+
+
+/* --- Global App Footer (Gemini Style) --- */
+.app-disclaimer-footer {
+  padding: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: #94a3b8;
+  background-color: white; /* Matches main content background */
+}
+
+.groq-link {
+  color: #0ea5e9;
+  text-decoration: none;
+  font-weight: 700;
+  margin: 0 3px;
+}
+
+/* --- Sidebar Feedback Section --- */
+.sidebar-feedback-box {
+  padding: 15px 20px;
+  border-top: 1px solid #333;
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.feedback-label {
+  font-size: 12px;
+  color: #94a3b8;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.global-stars {
+  display: flex;
+  gap: 5px;
+}
+
+.global-star-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  color: #4b5563; /* Gray-600 */
+  transition: color 0.2s ease;
+}
+
+.global-star-btn.active {
+  color: #fbbf24; /* Yellow-400 */
+}
+
+/* --- Adjustment for Sidebar Footer --- */
+.sidebar-footer {
+  border-top: none; /* Removed border to connect with feedback box */
+}

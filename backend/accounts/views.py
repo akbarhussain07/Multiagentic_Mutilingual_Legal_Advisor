@@ -13,6 +13,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import status
+from rag_api.models import UserProfile
 from dotenv import load_dotenv
 import os
 # Create your views here.
@@ -34,6 +35,9 @@ def signin_user(request):
     if user.check_password(password):
        # GET OR CREATE TOKEN
        token, _ = Token.objects.get_or_create(user=user)
+      
+       profile, _ = UserProfile.objects.get_or_create(user=user)
+       
        return Response({
             "token":token.key,
             "success": True, 
@@ -42,6 +46,7 @@ def signin_user(request):
                 "name": user.first_name,  
                 "email": user.email,
                 "is_superuser":user.is_superuser,
+                "rating":profile.rating
             }
         })
     else:

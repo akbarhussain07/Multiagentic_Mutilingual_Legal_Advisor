@@ -46,3 +46,17 @@ class ChatMessage(models.Model):
     
     def __str__(self):
         return f"{self.session.session_id} - {self.role}"
+    
+
+# --- NEW: User Profile for Global Settings & Ratings ---
+class UserProfile(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='profile'
+    )
+    rating = models.IntegerField(default=0) # Stores 1-5 rating
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Profile: {self.user.username} - Rating: {self.rating}"    

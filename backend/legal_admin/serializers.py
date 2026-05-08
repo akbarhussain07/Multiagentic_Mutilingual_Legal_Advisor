@@ -1,17 +1,3 @@
-# from rest_framework import serializers
-# from django.contrib.auth.models import User
-
-# class UserSerializer(serializers.ModelSerializer):
-#     first = serializers.CharField(source='first_name')
-#     last = serializers.CharField(source='last_name')
-
-#     class Meta:
-#         model = User
-#         fields = ['id','username', 'email', 'first', 'last', 'date_joined']
-
-
-
-
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from rag_api.models import ChatSession, ChatMessage
@@ -34,7 +20,7 @@ class UserSerializer(serializers.ModelSerializer):
     last = serializers.CharField(source='last_name')
     # Using the related_name from your model
     queries = ChatSessionSerializer(many=True, read_only=True, source='chat_sessions')
-
+    rating = serializers.IntegerField(source='profile.rating', read_only=True)
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first', 'last', 'queries']
+        fields = ['id', 'username', 'email', 'first', 'last', 'queries', 'rating']

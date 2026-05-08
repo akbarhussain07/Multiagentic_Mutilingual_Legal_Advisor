@@ -58,7 +58,41 @@ const AdminDashboard = () => {
   ? allUsers.reduce((sum, user) => sum + (user.queries?.length || 0), 0)
   : 0;
 
+//  Calculate Average Rating
+const calculateAvgRating = () => {
+  if (!allUsers || allUsers.length === 0) return "0.0";
+  
+  // Filter only users who have actually given a rating (> 0)
+  const ratedUsers = allUsers.filter(u => u.rating && u.rating > 0);
+  
+  if (ratedUsers.length === 0) return "0.0";
+  
+  const sum = ratedUsers.reduce((acc, u) => acc + u.rating, 0);
+  const avg = sum / ratedUsers.length;
+  
+  return avg.toFixed(1); // Returns string like "4.2"
+};
+  const averageRating = calculateAvgRating();
 
+//Calculate Active Users (Last 60 minutes)
+const calculateActiveUsers = () => {
+  if (!allUsers || allUsers.length === 0) return 0;
+
+  const fifteenMinutesAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+  const activeCount = allUsers.filter(u => {
+    // Check if any of the user's queries/sessions were updated recently
+    return u.queries?.some(session => {
+      const sessionDate = new Date(session.updated_at);
+      return sessionDate > fifteenMinutesAgo;
+    });
+  }).length;
+
+  return activeCount;
+};
+
+const activeUsersCount = calculateActiveUsers();
+  
   const handleSearch = (e) => {
     const term = e.target.value.toLowerCase();
     setSearchTerm(term);
@@ -113,7 +147,7 @@ const AdminDashboard = () => {
           {/* Admin Avatar with Dropdown Trigger */}
           <div className="avatar-wrapper">
             <div className="avatar admin-avatar" onClick={() => setShowAdminDropdown(!showAdminDropdown)}>
-              AA
+              {adminData.name ? adminData.name.slice(0,2).toUpperCase(): 'AF'}
             </div>
             
             {showAdminDropdown && (
@@ -191,8 +225,8 @@ const AdminDashboard = () => {
         <div className="stats-row">
           <StatCard label="Total Users" value={allUsers.length} color="#2d6a4f" sub="↑ 2 this week" />
           <StatCard label="Total Queries" value={totalQueriesCount} color="#e8c97e" sub="↑ 12 today" />
-          <StatCard label="Avg Rating" value="4.2" color="#5b8dd9" sub="★ out of 5" />
-          <StatCard label="Active Today" value="3" color="#c0543a" sub="↓ 1 vs yesterday" />
+          <StatCard label="Avg Rating" value={averageRating} color="#5b8dd9" sub="★ out of 5" />
+          <StatCard label="Active Today" value={activeUsersCount} color="#c0543a" sub="↓ 1 vs yesterday" />
         </div>
 
         <div className="content-grid">

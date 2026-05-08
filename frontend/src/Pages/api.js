@@ -137,6 +137,24 @@ export const deleteChatSession = async (sessionId) => {
     return await response.json();
 };
 
+// Rating API
+export const submitGlobalRating = async (rating) => {
+  const token = localStorage.getItem('authToken');
+  
+  const response = await fetch(`${API_BASE_URL}/api/rate-app/`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ rating: rating }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Failed to submit rating');
+  }
+
+  return response.json();
+};
+
 
 // ---- Admin Dashboard API's ------
 // Fetch any user profile by userId

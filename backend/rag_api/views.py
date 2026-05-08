@@ -3,7 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
-from .models import ChatSession, ChatMessage
+from .models import ChatSession, ChatMessage, UserProfile
 from rest_framework import status
 from .rag_service import RAGService
 import logging
@@ -214,5 +214,26 @@ def delete_session(request, session_id):
         session = get_object_or_404(ChatSession, session_id=session_id, user=request.user)
         session.delete()
         return Response({'message': 'Session deleted successfully'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+    
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def rate_app(request):
+    """Save a global 1-5 star rating for the logged-in user"""
+    try:
+        user = request.user
+        rating_value = request.data.get('rating')
+
+        if rating_value is not None and 1 <= int(rating_value) <= 5:
+            # get_or_create ensures the user has a profile to save the rating to
+            profile, created = UserProfile.objects.get_or_create(user=user)
+            profile.rating = int(rating_value)
+            profile.save()
+            return Response({'message': 'Global rating saved'}, status=200)
+            
+        return Response({'error': 'Invalid rating value'}, status=400)
     except Exception as e:
         return Response({'error': str(e)}, status=500)
