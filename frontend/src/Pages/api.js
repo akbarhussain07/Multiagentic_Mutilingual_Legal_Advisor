@@ -1,7 +1,7 @@
 // Backend API integration for Django server
 
-// const API_BASE_URL = 'http://localhost:8000/';
-const API_BASE_URL = 'https://2d1zf1zf-8000.inc1.devtunnels.ms/';
+const API_BASE_URL = 'http://localhost:8000/';
+// const API_BASE_URL = 'https://2d1zf1zf-8000.inc1.devtunnels.ms/';
 
 // Helper to get headers with Auth Token
 const getHeaders = () => {
@@ -13,7 +13,7 @@ const getHeaders = () => {
 };
 
 
-// Add this to your existing api.js
+
 export const signup = async (userData) => {
   const response = await fetch(`${API_BASE_URL}/accounts/signup/`, {
     method: "POST",
@@ -31,7 +31,7 @@ export const signup = async (userData) => {
 };
 
 
-// Add this to your existing api.js
+
 export const login = async (credentials) => {
   const response = await fetch(`${API_BASE_URL}/accounts/login/`, {
     method: "POST",
@@ -195,4 +195,28 @@ export const getAllUsers = async () => {
     });
     if (!response.ok) throw new Error('User fetching failed on the server');
     return response.json();
+};
+
+
+
+
+// Uploads a PDF and indexes it into the Neo4j Knowledge Graph
+
+// Updated Upload function
+export const uploadDocument = async (formData) => {
+    const response = await fetch(`${API_BASE_URL}/api/upload-doc/`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data; // Should return { task_id, message }
+};
+
+// NEW: Status polling function
+export const getUploadStatus = async (taskId) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/upload-status/${taskId}/`);
+        return response.data;
+    } catch (error) {
+        console.error("Status check failed", error);
+        return null;
+    }
 };

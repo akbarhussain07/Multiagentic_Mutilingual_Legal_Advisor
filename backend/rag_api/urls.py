@@ -13,6 +13,10 @@ urlpatterns = [
     #Helth to check is neo4j database connected or not
     path('health/', views.health_check, name='health_check'),
 
+    # Route for document upload
+    path('upload-doc/', views.UploadDocumentView.as_view(), name='upload_document'),
+    path('upload-status/<str:task_id>/', views.get_upload_status, name='upload_status'),
+    
     # Global App Rating
     path('rate-app/', views.rate_app, name='rate_app'),
 ]

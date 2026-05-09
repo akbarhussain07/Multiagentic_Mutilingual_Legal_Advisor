@@ -7,6 +7,12 @@ from .models import ChatSession, ChatMessage, UserProfile
 from rest_framework import status
 from .rag_service import RAGService
 import logging
+import uuid
+
+from django.core.files.storage import default_storage
+from django.core.cache import cache
+from rest_framework.views import APIView
+from .ingestion_service import start_ingestion_thread 
 
 
 
@@ -237,3 +243,54 @@ def rate_app(request):
         return Response({'error': 'Invalid rating value'}, status=400)
     except Exception as e:
         return Response({'error': str(e)}, status=500)
+    
+
+
+class UploadDocumentView(APIView):
+    """
+    Saves the file and starts the background indexing process.
+    Returns a task_id immediately.
+    """
+    def post(self, request):
+        file_obj = request.FILES.get('file')
+        law_type = request.data.get('law_type', 'Pakistani')
+
+        if not file_obj:
+            return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Generate a unique task ID
+        task_id = str(uuid.uuid4())
+        
+        # 2. Save the file temporarily to the 'media/tmp' folder
+        # This is necessary because the background thread needs a physical file path
+        path = default_storage.save(f"tmp/{task_id}_{file_obj.name}", file_obj)
+        full_path = default_storage.path(path)
+
+        # 3. Initialize the progress in cache (Set to 0%)
+        cache.set(f"task_{task_id}", {
+            "status": "starting", 
+            "progress": 0, 
+            "fileName": file_obj.name
+        }, 3600)
+
+        # 4. Start the background thread (from ingestion_service.py)
+        # This does NOT block the request
+        start_ingestion_thread(full_path, file_obj.name, law_type, task_id)
+
+        # 5. Return the task_id to React immediately
+        return Response({
+            "task_id": task_id, 
+            "message": "Upload successful. Indexing started in background."
+        }, status=status.HTTP_202_ACCEPTED)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_upload_status(request, task_id):
+    """
+    Endpoint for the frontend to poll for progress updates.
+    """
+    status_data = cache.get(f"task_{task_id}")
+    if not status_data:
+        return Response({"error": "Task not found or expired"}, status=404)
+    
+    return Response(status_data)
