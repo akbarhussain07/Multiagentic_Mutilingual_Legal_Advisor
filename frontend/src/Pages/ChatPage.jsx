@@ -25,6 +25,38 @@ import {
   submitGlobalRating,
 } from "./api";
 
+function InlineMarkdown({ text }) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={index}>{part.slice(1, -1)}</code>;
+    }
+    return <React.Fragment key={index}>{part}</React.Fragment>;
+  });
+}
+
+function StructuredText({ content }) {
+  const lines = String(content || "No response generated.").split("\n");
+  return (
+    <div className="structured-answer">
+      {lines.map((line, index) => {
+        const trimmed = line.trim();
+        if (!trimmed) return <div className="answer-spacer" key={index} />;
+        if (trimmed.startsWith("### ")) return <h4 key={index}><InlineMarkdown text={trimmed.slice(4)} /></h4>;
+        if (trimmed.startsWith("## ")) return <h3 key={index}><InlineMarkdown text={trimmed.slice(3)} /></h3>;
+        if (trimmed.startsWith("# ")) return <h2 key={index}><InlineMarkdown text={trimmed.slice(2)} /></h2>;
+        if (/^[-*] /.test(trimmed)) return <div className="answer-list-item" key={index}><span>•</span><p><InlineMarkdown text={trimmed.slice(2)} /></p></div>;
+        const numbered = trimmed.match(/^(\d+)\.\s+(.+)$/);
+        if (numbered) return <div className="answer-list-item" key={index}><span>{numbered[1]}.</span><p><InlineMarkdown text={numbered[2]} /></p></div>;
+        return <p key={index}><InlineMarkdown text={trimmed} /></p>;
+      })}
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const [message, setMessage] = useState("");
 
@@ -37,8 +69,23 @@ export default function ChatPage() {
   // 'messages' stores the content of the CURRENT active chat
   const [messages, setMessages] = useState([]);
 
-  // 'pakistan', 'islamic', or 'both'
-  const [viewMode, setViewMode] = useState("both");
+  // Selects exactly one Pinecone legal index per query.
+  const [viewMode, setViewMode] = useState("pakistani");
+
+  const suggestedQuestions = {
+    pakistani: [
+      "What documents are required to transfer property in Pakistan?",
+      "How can I challenge an incorrect land mutation entry?",
+    ],
+    islamic: [
+      "How is inherited property divided among Islamic heirs?",
+      "What makes a gift of property (hiba) valid in Islamic law?",
+    ],
+    procedure: [
+      "What steps are involved in filing a property ownership case?",
+      "Which documents should I prepare for a property dispute?",
+    ],
+  };
 
   // 'sidebarOpen' ,manages the side bar open or close
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -136,7 +183,7 @@ export default function ChatPage() {
   const checkBackendHealth = async () => {
     try {
       const health = await checkHealth();
-      if (health.status === "healthy" && health.neo4j_connected) {
+      if (health.status === "healthy" && health.pinecone_connected) {
         setBackendStatus("connected");
       } else {
         setBackendStatus("disconnected");
@@ -177,10 +224,11 @@ export default function ChatPage() {
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!message.trim() || isLoading || backendStatus !== "connected") return;
+  const handleSendMessage = async (questionOverride = null) => {
+    const outgoingQuestion = typeof questionOverride === "string" ? questionOverride : message;
+    if (!outgoingQuestion.trim() || isLoading || backendStatus !== "connected") return;
 
-    const currentQuestion = message;
+    const currentQuestion = outgoingQuestion.trim();
     setMessage("");
 
     // Optimistic UI Update: Show user message immediately
@@ -213,6 +261,8 @@ export default function ChatPage() {
         content: response.answer || "No response generated.",
         pakistanContent: response.pakistanContent,
         islamicContent: response.islamicContent,
+        procedureContent: response.procedureContent,
+        viewMode,
         sources: response.sources || [],
         timestamp: new Date().toLocaleTimeString([], {
           hour: "2-digit",
@@ -556,28 +606,6 @@ export default function ChatPage() {
             )}
           </div>
 
-          <div className="view-toggle-container">
-            <button
-              className={viewMode === "pakistan" ? "active" : ""}
-              onClick={() => setViewMode("pakistan")}
-            >
-              Pakistani
-            </button>
-
-            <button
-              className={viewMode === "both" ? "active" : ""}
-              onClick={() => setViewMode("both")}
-            >
-              Both
-            </button>
-
-            <button
-              className={viewMode === "islamic" ? "active" : ""}
-              onClick={() => setViewMode("islamic")}
-            >
-              Islamic
-            </button>
-          </div>
         </header>
 
         {/* Chat Area */}
@@ -589,9 +617,15 @@ export default function ChatPage() {
               </div>
               <h2 className="welcome-title">How can I help you today?</h2>
               <p className="welcome-subtitle">
-                Ask me anything about the Pakistani and Islamic Laws. I will
-                provide accurate answers based on official documents.
+                Choose a legal source beside the chat box, then ask a property-law question.
               </p>
+              <div className="suggested-questions" aria-label="Example questions">
+                {suggestedQuestions[viewMode].map((question) => (
+                  <button key={question} onClick={() => handleSendMessage(question)}>
+                    {question}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             <div className="messages-container">
@@ -616,17 +650,15 @@ export default function ChatPage() {
                         <Scale size={18} color="white" />
                       </div>
 
-                      <div className={`bot-dual-container ${viewMode}`}>
+                      <div className={`bot-dual-container ${msg.viewMode || viewMode}`}>
                         {/* Pakistani Law Panel - Shows if mode is 'pakistan' or 'both' */}
-                        {(viewMode === "pakistan" || viewMode === "both") && (
+                        {(msg.viewMode || viewMode) === "pakistani" && (
                           <div className="law-panel pakistan">
                             <div className="panel-header">
                               ⚖️ Pakistani Civil Law
                             </div>
                             <div className="message-bubble bot">
-                              <p className="message-text">
-                                {msg.pakistanContent || msg.content}
-                              </p>
+                              <StructuredText content={msg.pakistanContent || msg.content} />
 
                               {/* Sources specific to Pakistani context if they exist */}
                               {msg.sources &&
@@ -652,16 +684,13 @@ export default function ChatPage() {
                         )}
 
                         {/* Islamic Law Panel - Shows if mode is 'islamic' or 'both' */}
-                        {(viewMode === "islamic" || viewMode === "both") && (
+                        {(msg.viewMode || viewMode) === "islamic" && (
                           <div className="law-panel islamic">
                             <div className="panel-header">
                               🌙 Islamic Sharia Law
                             </div>
                             <div className="message-bubble bot">
-                              <p className="message-text">
-                                {msg.islamicContent ||
-                                  "Analysis not available for this query."}
-                              </p>
+                              <StructuredText content={msg.islamicContent || msg.content} />
 
                               {/* Sources specific to Islamic context */}
                               {msg.sources &&
@@ -682,6 +711,15 @@ export default function ChatPage() {
                               <span className="message-time bot">
                                 {msg.timestamp}
                               </span>
+                            </div>
+                          </div>
+                        )}
+                        {(msg.viewMode || viewMode) === "procedure" && (
+                          <div className="law-panel procedure">
+                            <div className="panel-header">Case Procedure</div>
+                            <div className="message-bubble bot">
+                              <StructuredText content={msg.procedureContent || msg.content} />
+                              <span className="message-time bot">{msg.timestamp}</span>
                             </div>
                           </div>
                         )}
@@ -719,13 +757,27 @@ export default function ChatPage() {
         <footer className="input-area">
           <div className="input-wrapper">
             <div className="input-container">
+              <label className="mode-select-label">
+                <span className="sr-only">Legal source</span>
+                <select
+                  className="mode-select"
+                  value={viewMode}
+                  onChange={(e) => setViewMode(e.target.value)}
+                  disabled={isLoading}
+                  aria-label="Choose legal source"
+                >
+                  <option value="pakistani">Pakistani</option>
+                  <option value="islamic">Islamic</option>
+                  <option value="procedure">Procedure</option>
+                </select>
+              </label>
               <input
                 type="text"
                 className="message-input"
                 placeholder="Ask a legal question..."
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                onKeyPress={handleKeyPress}
+                onKeyDown={handleKeyPress}
                 disabled={isLoading || backendStatus !== "connected"}
               />
               <button

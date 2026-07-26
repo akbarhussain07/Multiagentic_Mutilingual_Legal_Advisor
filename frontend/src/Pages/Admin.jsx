@@ -268,7 +268,7 @@ const activeUsersCount = calculateActiveUsers();
   <div className="panel" style={{ padding: '30px', color:'black'}}>
     <h3>Upload Legal Documents to Vector DB</h3>
     <p>
-      Upload PDF files to index them into the Neo4j Knowledge Graph.
+      Upload Markdown legal sources to index them in Pinecone.
     </p>
     
     <div className="upload-section" style={{ marginTop: '20px' }}>
@@ -281,12 +281,13 @@ const activeUsersCount = calculateActiveUsers();
         >
           <option value="Pakistani">Pakistani Law</option>
           <option value="Islamic">Islamic Law</option>
+          <option value="Procedure">Case Law / Procedure</option>
         </select>
       </div>
 
       <input 
         type="file" 
-        accept=".pdf" 
+        accept=".md,.markdown"
         onChange={(e) => setSelectedFile(e.target.files[0])} 
       />
       

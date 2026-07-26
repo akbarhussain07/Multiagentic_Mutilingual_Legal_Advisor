@@ -1,0 +1,65 @@
+{
+  "ingestion_version": "property-ingestion-v1",
+  "datasets": {
+    "pakistani": {
+      "data/pakistani/Property Law1.md": {
+        "source_hash": "b5cd5f5839b015bb9d435358993bf78e025aa5ba64e529038f8435ec2c42e7c5",
+        "vector_ids": [
+          "pakistani-c43adab77b79ca20b4a873f071c5346d",
+          "pakistani-5cfee7d1af901db7215603e1fd1116d6",
+          "pakistani-f1a220eddf11f6d151e8a49e7fcc3984",
+          "pakistani-26a79c8ebca50241c9f94a34ab5409cc",
+          "pakistani-45bdbd40b1346c77bebf1041f4617dfb",
+          "pakistani-f94f27af71e76f785f6462bf6bb79ff2",
+          "pakistani-af88d97e492dfe3dea524819cfee66f5",
+          "pakistani-6d45eed027fd7c1419af85264db6af07",
+          "pakistani-d7af90f571e0fd62450239b4567cace3",
+          "pakistani-322b962c45114d845bf0fdb8e09065a8"
+        ],
+        "index_name": "pakistani-property-law",
+        "namespace": "documents",
+        "updated_at": "2026-07-20T17:31:45.229951+00:00"
+      }
+    },
+    "islamic": {
+      "data/islamic/Quran verses .md": {
+        "source_hash": "5decd731d7171780ebfeabd2a6f446738feb8be99054f713938a22d9eec10d79",
+        "vector_ids": [
+          "islamic-8f72c6ef6e6e74f2f7e5cc81a3d09ae3",
+          "islamic-f22659e32830d8d984bb5dc2fa12b8da",
+          "islamic-72971a4926d865b95f04bfdcb8e50fc7",
+          "islamic-5a26e8dceb13adae4bfa0363b3265bfa",
+          "islamic-89b879817d0f1aee551bce6894563447",
+          "islamic-a5bfa4bfb4ec7ef46cb8c6b9922b8a94",
+          "islamic-ca45dabcd9edfdce6d25e9739342b15a",
+          "islamic-2abcbc8476c366057076063e18208d9b",
+          "islamic-ae3e36d565c4eb44ac5f35287b0a81ab",
+          "islamic-6778d271e9d7a2fef7194005db7830cc",
+          "islamic-0324cfce76251022ac872835f81855ae",
+          "islamic-3f5340f21fa472c69cd50dac0252bbae",
+          "islamic-358dca3159233d11440acd9108d6ee1e",
+          "islamic-a634012a4de1865052d2e8a378e0163f",
+          "islamic-8066c2a9774b2fb9c8dbe749c2b75ede",
+          "islamic-d6edc46ec90c53b177e61a4602f5b4ec",
+          "islamic-584548793e8632cc197e7b7529ed9ba3",
+          "islamic-85244866220603694f452210faa2e348",
+          "islamic-f10b6881a00579bc9454722c83c27b4e",
+          "islamic-3c12244bca07145ef233b34f282578dc",
+          "islamic-6fcc87d557999436c60c2085ec0e5565",
+          "islamic-e6b4699057094eced15b0c535517aee8",
+          "islamic-9645cd158a28cf4d00ec3f48492cfb46",
+          "islamic-1147f0637e19099d91c3e9394280b8b7",
+          "islamic-95026a6ff805662a636523a91891ef00",
+          "islamic-5160c7f5855e596733b57c41706b932f",
+          "islamic-06a24ff101e85988f592b1c19f1c58b0",
+          "islamic-770f9c815433691d3e0e8a88acd00e2d",
+          "islamic-387f77353b9b55f32eebdb9117f0064a",
+          "islamic-a01cef957cf2e7032dfcbebdf073b269"
+        ],
+        "index_name": "islamic-property-law",
+        "namespace": "documents",
+        "updated_at": "2026-07-21T03:47:09.625237+00:00"
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 // Backend API integration for Django server
 
-const API_BASE_URL = 'http://localhost:8000/';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 // const API_BASE_URL = 'https://2d1zf1zf-8000.inc1.devtunnels.ms/';
 
 // Helper to get headers with Auth Token
@@ -204,17 +204,26 @@ export const getAllUsers = async () => {
 
 // Updated Upload function
 export const uploadDocument = async (formData) => {
-    const response = await fetch(`${API_BASE_URL}/api/upload-doc/`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+    const token = localStorage.getItem('authToken');
+    const response = await fetch(`${API_BASE_URL}/api/upload-doc/`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Token ${token}` } : {},
+        body: formData,
     });
-    return response.data; // Should return { task_id, message }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Document upload failed');
+    return data;
 };
 
 // NEW: Status polling function
 export const getUploadStatus = async (taskId) => {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/upload-status/${taskId}/`);
-        return response.data;
+        const response = await fetch(`${API_BASE_URL}/api/upload-status/${taskId}/`, {
+            headers: getHeaders(),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Status check failed');
+        return data;
     } catch (error) {
         console.error("Status check failed", error);
         return null;

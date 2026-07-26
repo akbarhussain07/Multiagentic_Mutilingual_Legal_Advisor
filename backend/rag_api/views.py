@@ -4,14 +4,16 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from .models import ChatSession, ChatMessage, UserProfile
-from rest_framework import status
 from .rag_service import RAGService
 import logging
+import os
+import re
 import uuid
 
 from django.core.files.storage import default_storage
 from django.core.cache import cache
 from rest_framework.views import APIView
+from dotenv import load_dotenv
 from .ingestion_service import start_ingestion_thread 
 
 
@@ -23,7 +25,64 @@ from .ingestion_service import start_ingestion_thread
 
 
 logger = logging.getLogger(__name__)
-rag_service = RAGService()
+load_dotenv()
+_rag_service = None
+
+
+def get_rag_service():
+    """Initialize heavyweight models on first RAG request, not Django startup."""
+    global _rag_service
+    if _rag_service is None:
+        _rag_service = RAGService()
+    return _rag_service
+
+
+def get_conversational_response(question, view_mode):
+    """Answer small-talk without loading embeddings, Pinecone, or the LLM."""
+    normalized = re.sub(r"[^a-z0-9\s']", " ", question.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    capability_phrases = (
+        "what can you provide", "what can you do", "how can you help",
+        "who are you", "what do you do",
+    )
+    is_greeting = bool(re.match(r"^(hi|hello|hey|assalam|salam)\b", normalized))
+    name_match = re.search(r"\b(?:i am|i'm|my name is)\s+([a-z][a-z'-]*)", normalized)
+    asks_capabilities = any(phrase in normalized for phrase in capability_phrases)
+    legal_terms = (
+        "property", "land", "house", "inherit", "heir", "hiba", "gift",
+        "mutation", "registry", "registration", "tenant", "court", "case",
+        "transfer", "sale", "ownership", "document", "limitation", "waqf",
+    )
+    contains_legal_question = any(term in normalized for term in legal_terms)
+
+    if contains_legal_question or not (is_greeting or name_match or asks_capabilities):
+        return None
+
+    name = name_match.group(1).title() if name_match else ""
+    greeting = f"Hello, {name}!" if name else "Hello!"
+    mode_label = {
+        "pakistani": "Pakistani property law",
+        "islamic": "Islamic property law",
+        "procedure": "property-case procedure",
+    }[view_mode]
+    answer = (
+        f"## {greeting}\n\n"
+        "I can help with source-based property-law information in three areas:\n\n"
+        "- **Pakistani:** ownership, sale, transfer, registration, mutation, tenancy and succession.\n"
+        "- **Islamic:** inheritance, hiba, wasiyyah, waqf and other Sharia property rules.\n"
+        "- **Procedure:** courts, evidence, limitation periods, remedies and required documents.\n\n"
+        f"Your current source is **{mode_label}**. Select another source from the dropdown beside the chat box whenever needed."
+    )
+    return {
+        "answer": answer,
+        "pakistanContent": answer if view_mode == "pakistani" else "",
+        "islamicContent": answer if view_mode == "islamic" else "",
+        "procedureContent": answer if view_mode == "procedure" else "",
+        "sources": [],
+        "selected_agents": [],
+        "from_memory": False,
+        "success": True,
+    }
 
 
 @api_view(['POST'])
@@ -52,7 +111,7 @@ def get_suggestions(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        suggestions = rag_service.get_similar_questions(question, k)
+        suggestions = []
         
         return Response(
             {'suggestions': suggestions},
@@ -72,14 +131,21 @@ def health_check(request):
     Health check endpoint - checks API and Neo4j connection
     """
     try:
-        connection_status = rag_service.check_connection()
+        if _rag_service is not None:
+            connection_status = _rag_service.check_connection()
+        else:
+            configured = bool(os.getenv('PINECONE_API_KEY') and os.getenv('GROQ_API_KEY'))
+            connection_status = {
+                'connected': configured,
+                'configured_agents': [],
+                'initialization': 'deferred',
+            }
         return Response(
             {
                 'status': 'healthy',
                 'service': 'Legal Advisor RAG API',
-                'neo4j_connected': connection_status['connected'],
-                'documents_loaded': connection_status['documents_loaded'],
-                'message': connection_status['message']
+                'pinecone_connected': connection_status['connected'],
+                **connection_status,
             },
             status=status.HTTP_200_OK
         )
@@ -101,7 +167,13 @@ def query_rag(request):
         user = request.user
         question = request.data.get('question', '')
         session_id = request.data.get('session_id')
-        view_mode = request.data.get('view_mode', 'both')
+        view_mode = request.data.get('view_mode', 'pakistani')
+
+        if view_mode not in {'pakistani', 'islamic', 'procedure'}:
+            return Response(
+                {'error': "view_mode must be 'pakistani', 'islamic', or 'procedure'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not question:
             return Response({'error': 'Question is required'}, status=400)
@@ -115,7 +187,7 @@ def query_rag(request):
 
         # --- NEW: Step B: Fetch Chat History for Memory ---
         # We fetch the last 4 messages to keep the context without overwhelming the LLM
-        recent_messages = ChatMessage.objects.filter(session=session).order_by('-created_at')[1:5]
+        recent_messages = ChatMessage.objects.filter(session=session).order_by('-created_at')[:4]
         chat_history = []
         
         # We reverse them to get them in chronological order
@@ -136,7 +208,15 @@ def query_rag(request):
         )
   
         # Step D: Get AI Response (Now passing chat_history)
-        result = rag_service.query(question, view_mode=view_mode, chat_history=chat_history)
+        result = get_conversational_response(question, view_mode)
+        if result is None:
+            result = get_rag_service().query(
+                question,
+                view_mode=view_mode,
+                chat_history=chat_history,
+            )
+        if not result.get('success'):
+            return Response(result, status=status.HTTP_502_BAD_GATEWAY)
 
         # Step E: Structure the AI Response for Storage
         response_data = {
@@ -144,6 +224,13 @@ def query_rag(request):
             'sources': result.get('sources', []),
             'pakistanContent': result.get('pakistanContent'),
             'islamicContent': result.get('islamicContent'),
+            'procedureContent': result.get('procedureContent'),
+            'practicalSteps': result.get('practicalSteps', []),
+            'missingInformation': result.get('missingInformation', []),
+            'disclaimer': result.get('disclaimer'),
+            'selected_agents': result.get('selected_agents', []),
+            'from_memory': result.get('from_memory', False),
+            'viewMode': view_mode,
             'answer': result.get('answer') 
         }
 
@@ -201,6 +288,11 @@ def get_session_messages(request, session_id):
                     'type': 'bot',
                     'pakistanContent': m.content.get('pakistanContent'),
                     'islamicContent': m.content.get('islamicContent'),
+                    'procedureContent': m.content.get('procedureContent'),
+                    'practicalSteps': m.content.get('practicalSteps', []),
+                    'missingInformation': m.content.get('missingInformation', []),
+                    'disclaimer': m.content.get('disclaimer'),
+                    'viewMode': m.content.get('viewMode', 'pakistani'),
                     'answer': m.content.get('answer'),
                     'sources': m.content.get('sources', []),
                     'timestamp': m.created_at.strftime("%H:%M")
@@ -251,12 +343,19 @@ class UploadDocumentView(APIView):
     Saves the file and starts the background indexing process.
     Returns a task_id immediately.
     """
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
         file_obj = request.FILES.get('file')
         law_type = request.data.get('law_type', 'Pakistani')
 
         if not file_obj:
             return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
+        if not file_obj.name.lower().endswith(('.md', '.markdown')):
+            return Response(
+                {"error": "Only Markdown files (.md) are supported by the ingestion pipeline."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # 1. Generate a unique task ID
         task_id = str(uuid.uuid4())

@@ -109,7 +109,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'LegalAdvisor',
         'USER':'postgres',
-        'PASSWORD':'aftab123',
+        'PASSWORD':'acuk@123',
         'HOST':'localhost',
     }
 }
