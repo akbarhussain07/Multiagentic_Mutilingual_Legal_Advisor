@@ -4,24 +4,14 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from .models import ChatSession, ChatMessage, UserProfile
-from .rag_service import RAGService
+from .smalltalk import is_smalltalk, smalltalk_reply
 import logging
-import os
-import re
 import uuid
 
 from django.core.files.storage import default_storage
 from django.core.cache import cache
 from rest_framework.views import APIView
 from dotenv import load_dotenv
-from .ingestion_service import start_ingestion_thread 
-
-
-
-
-
-
-
 
 
 logger = logging.getLogger(__name__)
@@ -31,58 +21,29 @@ _rag_service = None
 
 def get_rag_service():
     """Initialize heavyweight models on first RAG request, not Django startup."""
+    from .rag_service import RAGService
+
     global _rag_service
     if _rag_service is None:
         _rag_service = RAGService()
     return _rag_service
 
 
+def normalize_view_mode(view_mode):
+    """Map legacy procedure mode onto Pakistani; allow dual-agent 'both'."""
+    value = (view_mode or "pakistani").strip().lower()
+    if value == "procedure":
+        return "pakistani"
+    if value in {"pakistani", "islamic", "both"}:
+        return value
+    return None
+
+
 def get_conversational_response(question, view_mode):
-    """Answer small-talk without loading embeddings, Pinecone, or the LLM."""
-    normalized = re.sub(r"[^a-z0-9\s']", " ", question.lower())
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    capability_phrases = (
-        "what can you provide", "what can you do", "how can you help",
-        "who are you", "what do you do",
-    )
-    is_greeting = bool(re.match(r"^(hi|hello|hey|assalam|salam)\b", normalized))
-    name_match = re.search(r"\b(?:i am|i'm|my name is)\s+([a-z][a-z'-]*)", normalized)
-    asks_capabilities = any(phrase in normalized for phrase in capability_phrases)
-    legal_terms = (
-        "property", "land", "house", "inherit", "heir", "hiba", "gift",
-        "mutation", "registry", "registration", "tenant", "court", "case",
-        "transfer", "sale", "ownership", "document", "limitation", "waqf",
-    )
-    contains_legal_question = any(term in normalized for term in legal_terms)
-
-    if contains_legal_question or not (is_greeting or name_match or asks_capabilities):
+    """Answer small-talk without loading embeddings, Qdrant, or the LLM."""
+    if not is_smalltalk(question):
         return None
-
-    name = name_match.group(1).title() if name_match else ""
-    greeting = f"Hello, {name}!" if name else "Hello!"
-    mode_label = {
-        "pakistani": "Pakistani property law",
-        "islamic": "Islamic property law",
-        "procedure": "property-case procedure",
-    }[view_mode]
-    answer = (
-        f"## {greeting}\n\n"
-        "I can help with source-based property-law information in three areas:\n\n"
-        "- **Pakistani:** ownership, sale, transfer, registration, mutation, tenancy and succession.\n"
-        "- **Islamic:** inheritance, hiba, wasiyyah, waqf and other Sharia property rules.\n"
-        "- **Procedure:** courts, evidence, limitation periods, remedies and required documents.\n\n"
-        f"Your current source is **{mode_label}**. Select another source from the dropdown beside the chat box whenever needed."
-    )
-    return {
-        "answer": answer,
-        "pakistanContent": answer if view_mode == "pakistani" else "",
-        "islamicContent": answer if view_mode == "islamic" else "",
-        "procedureContent": answer if view_mode == "procedure" else "",
-        "sources": [],
-        "selected_agents": [],
-        "from_memory": False,
-        "success": True,
-    }
+    return smalltalk_reply(question, view_mode)
 
 
 @api_view(['POST'])
@@ -127,24 +88,29 @@ def get_suggestions(request):
 
 @api_view(['GET'])
 def health_check(request):
-    """
-    Health check endpoint - checks API and Neo4j connection
-    """
+    """Health check for the API and Qdrant retrieval backend."""
     try:
         if _rag_service is not None:
             connection_status = _rag_service.check_connection()
         else:
-            configured = bool(os.getenv('PINECONE_API_KEY') and os.getenv('GROQ_API_KEY'))
-            connection_status = {
-                'connected': configured,
-                'configured_agents': [],
-                'initialization': 'deferred',
-            }
+            try:
+                from .qdrant_setup import check_qdrant_health
+
+                connection_status = check_qdrant_health()
+            except Exception as exc:
+                connection_status = {
+                    "connected": False,
+                    "qdrant_connected": False,
+                    "error": str(exc),
+                }
+            connection_status['initialization'] = 'deferred'
+            connection_status['configured_agents'] = []
+        connected = bool(connection_status.get('connected'))
         return Response(
             {
-                'status': 'healthy',
+                'status': 'healthy' if connected else 'degraded',
                 'service': 'Legal Advisor RAG API',
-                'pinecone_connected': connection_status['connected'],
+                'qdrant_connected': connected,
                 **connection_status,
             },
             status=status.HTTP_200_OK
@@ -167,11 +133,11 @@ def query_rag(request):
         user = request.user
         question = request.data.get('question', '')
         session_id = request.data.get('session_id')
-        view_mode = request.data.get('view_mode', 'pakistani')
+        view_mode = normalize_view_mode(request.data.get('view_mode', 'pakistani'))
 
-        if view_mode not in {'pakistani', 'islamic', 'procedure'}:
+        if view_mode is None:
             return Response(
-                {'error': "view_mode must be 'pakistani', 'islamic', or 'procedure'"},
+                {'error': "view_mode must be 'pakistani', 'islamic', or 'both'"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -351,9 +317,9 @@ class UploadDocumentView(APIView):
 
         if not file_obj:
             return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
-        if not file_obj.name.lower().endswith(('.md', '.markdown')):
+        if not file_obj.name.lower().endswith(('.md', '.markdown', '.pdf')):
             return Response(
-                {"error": "Only Markdown files (.md) are supported by the ingestion pipeline."},
+                {"error": "Only Markdown (.md) and PDF (.pdf) files are supported."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -371,6 +337,8 @@ class UploadDocumentView(APIView):
             "progress": 0, 
             "fileName": file_obj.name
         }, 3600)
+
+        from .ingestion_service import start_ingestion_thread
 
         # 4. Start the background thread (from ingestion_service.py)
         # This does NOT block the request

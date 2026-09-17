@@ -10,7 +10,7 @@ urlpatterns = [
     path('history/<str:session_id>/', views.get_session_messages, name='session_messages'),
     path('history/<str:session_id>/delete/', views.delete_session, name='delete_session'),
 
-    #Helth to check is neo4j database connected or not
+    # Health check for API and Qdrant
     path('health/', views.health_check, name='health_check'),
 
     # Route for document upload

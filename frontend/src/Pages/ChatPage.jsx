@@ -69,21 +69,22 @@ export default function ChatPage() {
   // 'messages' stores the content of the CURRENT active chat
   const [messages, setMessages] = useState([]);
 
-  // Selects exactly one Pinecone legal index per query.
+  // Pakistani, Islamic, or both (master may fan out to both agents).
   const [viewMode, setViewMode] = useState("pakistani");
 
   const suggestedQuestions = {
     pakistani: [
       "What documents are required to transfer property in Pakistan?",
       "How can I challenge an incorrect land mutation entry?",
+      "What is the procedure for filing a bail application in Pakistan?",
     ],
     islamic: [
       "How is inherited property divided among Islamic heirs?",
       "What makes a gift of property (hiba) valid in Islamic law?",
     ],
-    procedure: [
-      "What steps are involved in filing a property ownership case?",
-      "Which documents should I prepare for a property dispute?",
+    both: [
+      "What does Pakistani law say about inheritance and how does Islamic law view it?",
+      "Can a father gift a house to one son under Pakistani and Islamic law?",
     ],
   };
 
@@ -183,7 +184,7 @@ export default function ChatPage() {
   const checkBackendHealth = async () => {
     try {
       const health = await checkHealth();
-      if (health.status === "healthy" && health.pinecone_connected) {
+      if (health.status === "healthy" && (health.qdrant_connected || health.connected)) {
         setBackendStatus("connected");
       } else {
         setBackendStatus("disconnected");
@@ -620,7 +621,7 @@ export default function ChatPage() {
                 Choose a legal source beside the chat box, then ask a property-law question.
               </p>
               <div className="suggested-questions" aria-label="Example questions">
-                {suggestedQuestions[viewMode].map((question) => (
+                {(suggestedQuestions[viewMode] || suggestedQuestions.pakistani).map((question) => (
                   <button key={question} onClick={() => handleSendMessage(question)}>
                     {question}
                   </button>
@@ -651,14 +652,22 @@ export default function ChatPage() {
                       </div>
 
                       <div className={`bot-dual-container ${msg.viewMode || viewMode}`}>
-                        {/* Pakistani Law Panel - Shows if mode is 'pakistan' or 'both' */}
-                        {(msg.viewMode || viewMode) === "pakistani" && (
+                        {["pakistani", "both", "procedure"].includes(msg.viewMode || viewMode) && (
                           <div className="law-panel pakistan">
                             <div className="panel-header">
                               ⚖️ Pakistani Civil Law
                             </div>
                             <div className="message-bubble bot">
-                              <StructuredText content={msg.pakistanContent || msg.content} />
+                              <StructuredText
+                                content={
+                                  msg.pakistanContent ||
+                                  ((msg.viewMode || viewMode) === "procedure"
+                                    ? msg.procedureContent
+                                    : "") ||
+                                  msg.answer ||
+                                  msg.content
+                                }
+                              />
 
                               {/* Sources specific to Pakistani context if they exist */}
                               {msg.sources &&
@@ -671,7 +680,7 @@ export default function ChatPage() {
                                       .filter((s) => s.law_type === "Pakistani")
                                       .map((source, sIdx) => (
                                         <div key={sIdx} className="source-item">
-                                          • {source.content || source}
+                                          • {source.title || source.content || source}
                                         </div>
                                       ))}
                                   </div>
@@ -683,8 +692,7 @@ export default function ChatPage() {
                           </div>
                         )}
 
-                        {/* Islamic Law Panel - Shows if mode is 'islamic' or 'both' */}
-                        {(msg.viewMode || viewMode) === "islamic" && (
+                        {["islamic", "both"].includes(msg.viewMode || viewMode) && (
                           <div className="law-panel islamic">
                             <div className="panel-header">
                               🌙 Islamic Sharia Law
@@ -703,7 +711,7 @@ export default function ChatPage() {
                                       .filter((s) => s.law_type === "Islamic")
                                       .map((source, sIdx) => (
                                         <div key={sIdx} className="source-item">
-                                          • {source.content || source}
+                                          • {source.title || source.content || source}
                                         </div>
                                       ))}
                                   </div>
@@ -768,7 +776,7 @@ export default function ChatPage() {
                 >
                   <option value="pakistani">Pakistani</option>
                   <option value="islamic">Islamic</option>
-                  <option value="procedure">Procedure</option>
+                  <option value="both">Both</option>
                 </select>
               </label>
               <input
