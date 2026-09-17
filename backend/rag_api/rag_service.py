@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import logging
@@ -9,34 +10,187 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict
+
 from dotenv import load_dotenv
-from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_pinecone import Pinecone as PineconeVectorStore
 from langgraph.graph import END, START, StateGraph
-from pinecone import Pinecone as PineconeClient, ServerlessSpec
 from pydantic import BaseModel, Field, field_validator
+from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct, SparseVector
+
+from . import rag_config
+from .diversity import order_breadth_first
+from .embedder import BGEEmbedder
+from .qdrant_setup import COLLECTION_NAME, get_qdrant_client, setup_collection
+from .reranker import BGEReranker
+from .retriever import HybridRetriever
+
 logger = logging.getLogger(__name__)
 
-AgentName = Literal["pakistani_agent", "islamic_agent", "procedure_agent"]
-ViewMode = Literal["pakistani", "islamic", "procedure"]
+AgentName = Literal["pakistani_agent", "islamic_agent"]
+ViewMode = Literal["pakistani", "islamic", "both"]
+_VALID_AGENTS: tuple[str, ...] = ("pakistani_agent", "islamic_agent")
+_AGENT_ALIASES = {
+    "pakistani_agent": "pakistani_agent",
+    "pakistani": "pakistani_agent",
+    "pakistan": "pakistani_agent",
+    "pk": "pakistani_agent",
+    "islamic_agent": "islamic_agent",
+    "islamic": "islamic_agent",
+    "islam": "islamic_agent",
+    "is": "islamic_agent",
+}
 
-# Structured model outputs
+
+def _normalize_agent_name(value: Any) -> Optional[AgentName]:
+    if not isinstance(value, str):
+        return None
+    key = re.sub(r"[^a-z_]+", "", value.strip().lower().replace("-", "_").replace(" ", "_"))
+    mapped = _AGENT_ALIASES.get(key)
+    if mapped in _VALID_AGENTS:
+        return mapped  # type: ignore[return-value]
+    return None
+
+
+def _normalize_agent_list(value: Any) -> List[AgentName]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    normalized: List[AgentName] = []
+    for item in value:
+        agent = _normalize_agent_name(item)
+        if agent and agent not in normalized:
+            normalized.append(agent)
+    return normalized
+
+
+def _normalize_sub_query_map(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    cleaned: Dict[str, str] = {}
+    for raw_key, raw_query in value.items():
+        query = str(raw_query or "").strip()
+        if not query:
+            continue
+        agent = _normalize_agent_name(str(raw_key))
+        key = agent or str(raw_key).strip().lower()
+        if key:
+            cleaned[key] = query
+    return cleaned
+
+
+_DOMAIN_HINTS = (
+    "hudood", "hadd", "zina", "qisas", "diyat", "fiqh", "quran", "hadith",
+    "sharia", "shariah", "islamic", "islam", "ppc", "crpc", "pakistan",
+    "constitution", "assembly", "bail", "inheritance", "hiba", "waqf",
+    "nikah", "talaq", "muta", "ordinance", "penal", "murder", "theft",
+    "property", "land", "court", "law", "legal", "section", "article",
+    "qanun", "statute", "judgment", "wasiyyah", "succession", "mutation",
+    "registration", "tenant", "mortgage", "partition", "narcotic",
+    "terrorism", "offence", "offense", "punishment", "witness",
+    "قانون", "حدود", "زنا", "قصاص", "دیات", "شریعت", "میراث", "وراثت",
+    "نکاح", "طلاق", "وقف", "ہبہ", "ضمانت", "عدالت", "شريعة", "ميراث",
+)
+
+
+def _looks_domain_related(question: str) -> bool:
+    text = (question or "").strip().lower()
+    if not text:
+        return False
+    if any(hint in text for hint in _DOMAIN_HINTS):
+        return True
+    # Arabic/Urdu legal characters often appear without Latin keywords.
+    return bool(re.search(r"[\u0600-\u06FF]", question or ""))
+
+
+def _looks_clearly_out_of_domain(question: str) -> bool:
+    text = re.sub(r"\s+", " ", (question or "").strip().lower())
+    if not text:
+        return True
+    if _looks_domain_related(text):
+        return False
+    off_topic = (
+        "capital of france", "iphone", "docker", "kubernetes", "football",
+        "cricket score", "weather", "recipe", "movie", "bitcoin price",
+        "stock market tip", "write python code", "javascript",
+    )
+    return any(item in text for item in off_topic)
+
+
+def _assign_sub_queries(
+    raw: Dict[str, str],
+    allowed: Sequence[AgentName],
+    standalone: str,
+) -> Dict[str, str]:
+    assigned: Dict[str, str] = {}
+    leftovers: List[str] = []
+    for key, query in (raw or {}).items():
+        text = (query or "").strip()
+        if not text:
+            continue
+        agent = _normalize_agent_name(key)
+        if agent and agent in allowed:
+            assigned[agent] = text
+        else:
+            leftovers.append(text)
+    fill = leftovers[0] if leftovers else standalone
+    for agent in allowed:
+        if agent not in assigned:
+            assigned[agent] = fill
+    return assigned
+
+
+def _build_chat_model():
+    """Build the chat LLM from env (Groq or OpenRouter)."""
+    provider = rag_config.LLM_PROVIDER
+    temperature = rag_config.GROQ_TEMPERATURE
+    timeout = rag_config.GROQ_TIMEOUT_SECONDS
+    max_retries = rag_config.GROQ_MAX_RETRIES
+
+    if provider == "openrouter":
+        if not rag_config.OPENROUTER_API_KEY:
+            raise RuntimeError("Missing environment variable: OPENROUTER_API_KEY")
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError as exc:
+            raise RuntimeError(
+                "langchain-openai is required for OpenRouter. "
+                "Install with: pip install langchain-openai"
+            ) from exc
+        return ChatOpenAI(
+            model=rag_config.OPENROUTER_MODEL,
+            api_key=rag_config.OPENROUTER_API_KEY,
+            base_url=rag_config.OPENROUTER_BASE_URL,
+            temperature=temperature,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+
+    if not os.getenv("GROQ_API_KEY"):
+        raise RuntimeError("Missing environment variable: GROQ_API_KEY")
+    return ChatGroq(
+        model=rag_config.GROQ_MODEL,
+        temperature=temperature,
+        max_retries=max_retries,
+        timeout=timeout,
+    )
+
 
 class MasterDecision(BaseModel):
-    """
-    Decision produced by the Master Agent after it has inspected semantic
-    memory candidates.
-
-    The Master Agent is one of the four agents. Memory search is an internal
-    capability of this agent, not a fifth agent.
-    """
-
     in_scope: bool = Field(
-        description="True only for Pakistani or Islamic property-law questions."
+        description=(
+            "True only when the query belongs to the selected dashboard domain "
+            "(Pakistani, Islamic, or Both). False for greetings already handled "
+            "elsewhere and for out-of-domain questions."
+        )
+    )
+    query_class: Literal["GREETING", "DOMAIN_QUERY", "OUT_OF_DOMAIN", "AMBIGUOUS"] = Field(
+        default="DOMAIN_QUERY",
+        description="Internal classification of the user message.",
     )
     standalone_question: str = Field(
         description="Complete question with references resolved from chat history."
@@ -46,7 +200,6 @@ class MasterDecision(BaseModel):
     )
     jurisdiction: Optional[str] = None
     province: Optional[str] = None
-
     memory_hit: bool = Field(
         description=(
             "True only when one supplied memory candidate answers the same legal "
@@ -57,19 +210,29 @@ class MasterDecision(BaseModel):
         default=None,
         description="Exact memory candidate ID to reuse when memory_hit is true.",
     )
-    memory_reason: str = Field(
-        description="Why memory is safe or unsafe to reuse."
+    memory_reason: str = Field(description="Why memory is safe or unsafe to reuse.")
+    selected_agents: List[str] = Field(
+        default_factory=list,
+        description="Only pakistani_agent and/or islamic_agent.",
     )
-
-    selected_agents: List[AgentName] = Field(default_factory=list)
-    sub_queries: Dict[AgentName, str] = Field(default_factory=dict)
+    sub_queries: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Retrieval queries keyed ONLY by pakistani_agent and/or islamic_agent. "
+            "Never use keys such as main, query, or general."
+        ),
+    )
     routing_reason: str = ""
 
-    @field_validator("selected_agents")
+    @field_validator("selected_agents", mode="before")
     @classmethod
-    def unique_agents(cls, value: List[AgentName]) -> List[AgentName]:
-        return list(dict.fromkeys(value))
+    def coerce_selected_agents(cls, value: Any) -> List[str]:
+        return list(_normalize_agent_list(value))
 
+    @field_validator("sub_queries", mode="before")
+    @classmethod
+    def coerce_sub_queries(cls, value: Any) -> Dict[str, str]:
+        return _normalize_sub_query_map(value)
 
 class AnswerPayload(BaseModel):
     direct_answer: str
@@ -92,6 +255,7 @@ class EvidenceItem(TypedDict):
     metadata: Dict[str, Any]
     retrieval_score: float
     rerank_score: float
+    doc_id: str
 
 
 class MemoryCandidate(TypedDict):
@@ -114,149 +278,141 @@ class GraphState(TypedDict, total=False):
     question: str
     history: List[Any]
     view_mode: ViewMode
-
     memory_candidates: List[MemoryCandidate]
     master_decision: Dict[str, Any]
     selected_agents: List[AgentName]
-
     memory_answer_payload: Dict[str, Any]
     memory_sources: List[Dict[str, Any]]
-
     pakistani_evidence: List[EvidenceItem]
     islamic_evidence: List[EvidenceItem]
-    procedure_evidence: List[EvidenceItem]
     merged_evidence: List[EvidenceItem]
-
     answer_payload: Dict[str, Any]
     answer_from_memory: bool
     error: str
 
 
 MASTER_SYSTEM_PROMPT = """
-You are the Master Agent for a Pakistani and Islamic PROPERTY-LAW RAG system.
+You are the Master Agent for a Pakistani and Islamic law RAG system.
 
-You have two responsibilities, in this exact order:
+Dashboard selection (view_mode) is AUTHORITATIVE and must never be silently changed:
+- Pakistani → Pakistani knowledge only
+- Islamic → Islamic knowledge only
+- Both → Pakistani and Islamic knowledge may both be used
 
-A. MEMORY DECISION
-You receive zero or more previous-answer memory candidates.
-Reuse a memory answer only when ALL of these are true:
-- It addresses the same legal issue.
-- Material facts are equivalent.
-- Jurisdiction/province is compatible.
-- The requested legal framework/view mode is compatible.
-- The new question does not add an important fact.
-- The candidate is not merely topically similar.
-- The candidate ID is actually present in the supplied candidates.
+Do NOT answer the user's legal question. Do NOT invent facts, citations, or sources.
 
-Important examples:
-- "Can a father gift a house to one son?" is NOT equivalent to
-  "Can a terminally ill father gift a house to one son?"
-- Punjab and Sindh procedures are not automatically interchangeable.
-- A general hiba answer is not automatically reusable for a disputed oral gift
-  after the donor's death.
-- A question asking for both Pakistani and Islamic law must not reuse an answer
-  that covers only one framework.
+Classify every message as one of:
+GREETING | DOMAIN_QUERY | OUT_OF_DOMAIN | AMBIGUOUS
 
-If a candidate is safe to reuse:
-- set memory_hit=true,
-- provide its exact memory_id,
-- selected_agents must be empty,
-- sub_queries must be empty.
+in_scope rules relative to the selected dashboard domain:
+- Pakistani selected: in_scope=true only for Pakistani-law questions (statutes,
+  Constitution, legislation, courts, procedure, case law, institutions, PPC/CrPC,
+  registration, mutation, tenancy, succession, and related Pakistani legal topics).
+- Islamic selected: in_scope=true only for Islamic questions (Quran, Hadith, fiqh,
+  Sharia, Islamic inheritance, hiba, wasiyyah, waqf, and related Islamic topics).
+- Both selected: in_scope=true for Pakistani and/or Islamic questions.
+- Greetings/small talk: query_class=GREETING, in_scope=false.
+- Unrelated topics (e.g. capital of France, Docker, iPhone price): 
+  query_class=OUT_OF_DOMAIN, in_scope=false.
+- Ambiguous: if it can reasonably be answered inside the selected domain, treat as
+  DOMAIN_QUERY with in_scope=true; otherwise OUT_OF_DOMAIN with in_scope=false.
 
-B. RETRIEVAL ROUTING WHEN MEMORY MISSES
-Available retrieval agents:
+MEMORY DECISION (first):
+Reuse a memory candidate only when ALL are true:
+- Same legal issue and materially equivalent facts
+- Compatible jurisdiction/province and view_mode
+- Candidate ID is present in the supplied list
+- Not merely topically similar
+If reusable: memory_hit=true, set exact memory_id, selected_agents=[], sub_queries={{}}.
 
-1. pakistani_agent
-   Pakistani statutes and rules: ownership, title, sale, transfer,
-   registration, mutation, tenancy, land records, succession procedure,
-   stamp matters, mortgage, possession, partition and acquisition.
-
-2. islamic_agent
-   Islamic inheritance, hiba, wasiyyah, waqf, Islamic sale, ijarah, rahn,
-   ownership and other Sharia property-law issues.
-
-3. procedure_agent
-   Judgments, court procedure, evidence, burden of proof, remedies, forums,
-   limitation, document requirements and administrative procedure.
-
-Routing rules:
-- Select only agents that are necessary.
-- Generate a separate optimized retrieval query for each selected agent.
-- A contested oral property gift after death commonly needs all three.
-- A pure Islamic inheritance-share question may need islamic_agent only.
-- Registry/mutation questions normally need pakistani_agent and may require
-  procedure_agent when documents or steps are requested.
-- Do not answer the user's legal question.
-- Do not invent missing facts.
+RETRIEVAL WHEN MEMORY MISSES:
+Code enforces which agents run from view_mode. Your job is to:
+1. Set in_scope and query_class correctly.
+2. Write standalone_question with history references resolved.
+3. Write a short topic.
+4. Produce optimized sub_queries using ONLY these exact keys:
+   - "pakistani_agent"
+   - "islamic_agent"
+   Example for Pakistani domain:
+   sub_queries = {{"pakistani_agent": "who can dissolve National Assembly Pakistan"}}
+   Never use keys like "main", "query", "general", or free-form labels.
+5. Never suggest searching the other domain when only one is selected.
+6. There is no procedure agent; Pakistani procedure uses pakistani_agent.
 """
 
 
 ANSWER_SYSTEM_PROMPT = """
-You are the final synthesis step, not an agent.
+You synthesize the final answer from retrieved Qdrant evidence only.
 
-Use only the supplied evidence. Never invent a source title, section, page,
-case name, court, fiqh school, URL, verse, hadith reference, or source ID.
+Never invent a source title, section, page, case name, court, fiqh school, URL,
+verse, hadith reference, document ID, or source ID that is not in the evidence.
 
 Requirements:
-1. Cite legal claims only with supplied IDs such as [PK-ab12].
-2. Keep Pakistani-law, Islamic-law and procedure/case analysis separate.
-3. State clearly when evidence is insufficient or conflicting.
-4. Do not merge Pakistani law and Islamic law into one rule.
-5. Do not calculate inheritance shares if essential heirs, debts, funeral
+1. Cite legal claims only with supplied IDs such as [PK-ab12] or [IS-ab12].
+2. Keep Pakistani-law and Islamic-law analysis separate. Never present Islamic
+   material as Pakistani law or Pakistani law as an Islamic ruling.
+3. When view_mode is Both and both sides are relevant, prefer clear sections:
+   Pakistani Perspective / Islamic Perspective. If only one side is relevant,
+   use that side only — do not force both.
+4. Put Pakistani procedure, forums, limitation and document steps in
+   pakistani_analysis (and procedure_analysis when procedural).
+5. Preserve uncertainty or conflicts present in the evidence.
+6. Do not calculate inheritance shares if essential heirs, debts, funeral
    expenses, or will information are missing.
-6. Answer in the user's language.
-7. cited_source_ids must contain only IDs actually used.
-8. Write direct_answer and each applicable analysis field as clean Markdown.
-9. Start with a short direct conclusion, then use descriptive headings and
-   concise bullet points for rules, application, required documents and next steps.
-10. Use Markdown tables only for genuine comparisons. Use LaTeX notation only
-    when a mathematical expression (such as an inheritance fraction) benefits
-    from it; do not use LaTeX merely for visual decoration.
+7. Answer in the user's language (English, Urdu, or Arabic).
+8. cited_source_ids must contain only IDs actually used from the evidence.
+9. Write clean Markdown: short direct conclusion, then headings and bullets.
+10. Never claim a document was retrieved unless its ID appears in the evidence.
 """
 
-# Persistent semantic answer memory
+
+FALLBACK_SYSTEM_PROMPT = """
+You are the Master Agent producing the final answer after specialized retrieval
+agents returned little or no usable evidence.
+
+You MUST still answer as if synthesizing from the selected domain agents:
+- Islamic selected → write islamic_analysis and a clear direct_answer
+- Pakistani selected → write pakistani_analysis and a clear direct_answer
+- Both selected → write both pakistani_analysis and islamic_analysis when relevant
+
+Critical rules:
+1. Stay strictly inside the selected domain (Pakistani / Islamic / Both).
+2. Never claim that the answer came from retrieved documents or Qdrant unless
+   evidence IDs are provided in the prompt.
+3. Never invent document IDs, fake citations, or source URLs.
+4. Keep cited_source_ids empty unless evidence IDs are provided.
+5. Be concise, clear, factual, and well-structured Markdown.
+6. Keep Pakistani and Islamic analysis separate. Never present Islamic material
+   as Pakistani statute or Pakistani statute as an Islamic ruling.
+7. If a detail is uncertain, state the uncertainty; do not invent section numbers
+   or verse citations.
+8. Answer in the user's language (English, Urdu, or Arabic).
+9. For in-domain legal questions, NEVER answer with only "I don't know."
+   Provide the best domain-accurate explanation you can within the selected scope.
+10. Match the style of a specialized legal agent answer: short conclusion, then
+    headings/bullets for rules, application, and practical notes.
+"""
+
 
 class SemanticAnswerMemory:
-    """
-    Pinecone stores semantic vectors and lightweight searchable metadata.
-    SQLite stores the full answer payload and sources.
-
-    This avoids placing long legal answers inside Pinecone metadata.
-    """
+    """Qdrant stores memory vectors; SQLite stores the full answer payload."""
 
     def __init__(
         self,
-        pinecone: PineconeClient,
-        embeddings: HuggingFaceEmbeddings,
-        index_name: str,
-        dimension: int,
-        metric: str,
-        cloud: str,
-        region: str,
-        namespace: str,
+        client,
+        embedder: BGEEmbedder,
         sqlite_path: str,
         top_k: int,
         minimum_similarity: float,
-        auto_create_index: bool,
     ) -> None:
-        self.pc = pinecone
-        self.embeddings = embeddings
-        self.index_name = index_name
-        self.dimension = dimension
-        self.metric = metric
-        self.cloud = cloud
-        self.region = region
-        self.namespace = namespace
+        self.client = client
+        self.embedder = embedder
         self.top_k = top_k
         self.minimum_similarity = minimum_similarity
-        self.auto_create_index = auto_create_index
-
         self._db_path = Path(sqlite_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_lock = threading.Lock()
-
         self._initialize_database()
-        self.index = self._initialize_index()
 
     def _initialize_database(self) -> None:
         with self._connect() as conn:
@@ -281,126 +437,62 @@ class SemanticAnswerMemory:
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(
-            str(self._db_path),
-            timeout=30,
-            check_same_thread=False,
-        )
+        return sqlite3.connect(str(self._db_path), timeout=30, check_same_thread=False)
 
-    def _initialize_index(self):
-        existing = {
-            item["name"] if isinstance(item, dict) else item.name
-            for item in self.pc.list_indexes()
-        }
-
-        if self.index_name not in existing:
-            if not self.auto_create_index:
-                logger.warning(
-                    "Memory index %s does not exist; semantic memory disabled.",
-                    self.index_name,
-                )
-                return None
-
-            logger.info("Creating Pinecone memory index %s", self.index_name)
-            self.pc.create_index(
-                name=self.index_name,
-                dimension=self.dimension,
-                metric=self.metric,
-                spec=ServerlessSpec(
-                    cloud=self.cloud,
-                    region=self.region,
+    def search(self, question: str, view_mode: ViewMode) -> List[MemoryCandidate]:
+        vector = self.embedder.embed_query(question)
+        mode_values = [view_mode, "both"] if view_mode != "both" else ["both", "pakistani", "islamic"]
+        query_filter = Filter(
+            must=[
+                FieldCondition(key="content_type", match=MatchValue(value="answer_memory")),
+                Filter(
+                    should=[
+                        FieldCondition(key="view_mode", match=MatchValue(value=mode))
+                        for mode in mode_values
+                    ]
                 ),
-            )
-
-        return self.pc.Index(self.index_name)
-
-    def search(
-        self,
-        question: str,
-        view_mode: ViewMode,
-    ) -> List[MemoryCandidate]:
-        if not self.index:
-            return []
-
-        vector = self.embeddings.embed_query(f"query: {question}")
-
-        # The Master Agent performs the final safety decision. This filter only
-        # removes clearly incompatible modes.
-        mode_filter: Dict[str, Any]
-        if view_mode == "both":
-            mode_filter = {"view_mode": {"$eq": "both"}}
-        else:
-            mode_filter = {
-                "view_mode": {
-                    "$in": [view_mode, "both"]
-                }
-            }
-
+            ]
+        )
         try:
-            response = self.index.query(
-                namespace=self.namespace,
-                vector=vector,
-                top_k=self.top_k,
-                include_metadata=True,
-                filter=mode_filter,
+            response = self.client.query_points(
+                collection_name=COLLECTION_NAME,
+                query=vector.dense,
+                using="dense",
+                query_filter=query_filter,
+                limit=self.top_k,
+                with_payload=True,
             )
         except Exception as exc:
             logger.warning("Semantic memory query failed: %s", exc)
             return []
 
-        matches = getattr(response, "matches", None)
-        if matches is None and isinstance(response, dict):
-            matches = response.get("matches", [])
-        matches = matches or []
-
         candidates: List[MemoryCandidate] = []
-
-        for match in matches:
-            if isinstance(match, dict):
-                memory_id = str(match.get("id", ""))
-                score = float(match.get("score", 0.0))
-            else:
-                memory_id = str(getattr(match, "id", ""))
-                score = float(getattr(match, "score", 0.0))
-
+        for match in getattr(response, "points", None) or []:
+            payload = match.payload or {}
+            memory_id = str(payload.get("memory_id") or getattr(match, "id", ""))
+            score = float(getattr(match, "score", 0.0) or 0.0)
             if not memory_id or score < self.minimum_similarity:
                 continue
-
             record = self.get(memory_id)
             if not record:
                 continue
-
             record["similarity_score"] = score
             candidates.append(record)
-
         return candidates
 
     def get(self, memory_id: str) -> Optional[MemoryCandidate]:
         with self._db_lock, self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT
-                    memory_id,
-                    question,
-                    standalone_question,
-                    topic,
-                    jurisdiction,
-                    province,
-                    view_mode,
-                    selected_agents_json,
-                    answer_payload_json,
-                    sources_json,
-                    source_fingerprint,
-                    created_at
-                FROM answer_memory
-                WHERE memory_id = ?
+                SELECT memory_id, question, standalone_question, topic, jurisdiction,
+                       province, view_mode, selected_agents_json, answer_payload_json,
+                       sources_json, source_fingerprint, created_at
+                FROM answer_memory WHERE memory_id = ?
                 """,
                 (memory_id,),
             ).fetchone()
-
         if not row:
             return None
-
         return {
             "memory_id": row[0],
             "question": row[1],
@@ -430,88 +522,65 @@ class SemanticAnswerMemory:
         answer_payload: Dict[str, Any],
         sources: List[Dict[str, Any]],
     ) -> Optional[str]:
-        if not self.index:
-            return None
-
         memory_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
         source_fingerprint = self._source_fingerprint(sources)
-
         with self._db_lock, self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO answer_memory (
-                    memory_id,
-                    question,
-                    standalone_question,
-                    topic,
-                    jurisdiction,
-                    province,
-                    view_mode,
-                    selected_agents_json,
-                    answer_payload_json,
-                    sources_json,
-                    source_fingerprint,
-                    created_at
+                    memory_id, question, standalone_question, topic, jurisdiction,
+                    province, view_mode, selected_agents_json, answer_payload_json,
+                    sources_json, source_fingerprint, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    memory_id,
-                    question,
-                    standalone_question,
-                    topic,
-                    jurisdiction,
-                    province,
-                    view_mode,
-                    json.dumps(selected_agents, ensure_ascii=False),
+                    memory_id, question, standalone_question, topic, jurisdiction,
+                    province, view_mode, json.dumps(selected_agents, ensure_ascii=False),
                     json.dumps(answer_payload, ensure_ascii=False),
-                    json.dumps(sources, ensure_ascii=False),
-                    source_fingerprint,
-                    created_at,
+                    json.dumps(sources, ensure_ascii=False), source_fingerprint, created_at,
                 ),
             )
             conn.commit()
 
-        vector = self.embeddings.embed_query(
-            f"query: {standalone_question}"
-        )
-
-        metadata = {
-            "topic": topic[:200],
-            "jurisdiction": jurisdiction[:200],
-            "province": province[:200],
-            "view_mode": view_mode,
-            "source_fingerprint": source_fingerprint,
-            "created_at": created_at,
-        }
-
+        embedding = self.embedder.embed_query(standalone_question)
         try:
-            self.index.upsert(
-                namespace=self.namespace,
-                vectors=[
-                    {
-                        "id": memory_id,
-                        "values": vector,
-                        "metadata": metadata,
-                    }
+            self.client.upsert(
+                collection_name=COLLECTION_NAME,
+                points=[
+                    PointStruct(
+                        id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"memory:{memory_id}")),
+                        vector={
+                            "dense": embedding.dense,
+                            "sparse": SparseVector(
+                                indices=embedding.sparse_indices,
+                                values=embedding.sparse_values,
+                            ),
+                        },
+                        payload={
+                            "content_type": "answer_memory",
+                            "memory_id": memory_id,
+                            "topic": topic[:200],
+                            "jurisdiction": (jurisdiction or "")[:200],
+                            "province": (province or "")[:200],
+                            "view_mode": view_mode,
+                            "source_fingerprint": source_fingerprint,
+                            "created_at": created_at,
+                            "text": standalone_question,
+                        },
+                    )
                 ],
+                wait=True,
             )
         except Exception:
-            # Keep the two stores consistent.
             with self._db_lock, self._connect() as conn:
-                conn.execute(
-                    "DELETE FROM answer_memory WHERE memory_id = ?",
-                    (memory_id,),
-                )
+                conn.execute("DELETE FROM answer_memory WHERE memory_id = ?", (memory_id,))
                 conn.commit()
             raise
-
         return memory_id
 
     @staticmethod
-    def _source_fingerprint(
-        sources: List[Dict[str, Any]],
-    ) -> str:
+    def _source_fingerprint(sources: List[Dict[str, Any]]) -> str:
         identity = [
             {
                 "source_id": source.get("source_id", ""),
@@ -519,294 +588,15 @@ class SemanticAnswerMemory:
                 "section": source.get("section", ""),
                 "page": source.get("page", ""),
                 "source_url": source.get("source_url", ""),
-                "updated_at": source.get("updated_at", ""),
             }
             for source in sources
         ]
-        canonical = json.dumps(
-            identity,
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        canonical = json.dumps(identity, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-# Three specialized retrieval agents
-
-class BaseRetrievalAgent:
-    def __init__(
-        self,
-        *,
-        agent_name: AgentName,
-        vectorstore: PineconeVectorStore,
-        embeddings: HuggingFaceEmbeddings,
-        fetch_k: int,
-        final_k: int,
-        score_threshold: float,
-    ) -> None:
-        self.agent_name = agent_name
-        self.vectorstore = vectorstore
-        self.embeddings = embeddings
-        self.fetch_k = fetch_k
-        self.final_k = final_k
-        self.score_threshold = score_threshold
-
-    def retrieve(
-        self,
-        query: str,
-        decision: MasterDecision,
-    ) -> List[EvidenceItem]:
-        if not query.strip():
-            return []
-
-        prefixed = (
-            query if query.lower().startswith("query:")
-            else f"query: {query}"
-        )
-        metadata_filter = self.build_filter(decision)
-
-        try:
-            raw = self.vectorstore.similarity_search_with_relevance_scores(
-                query=prefixed,
-                k=self.fetch_k,
-                filter=metadata_filter,
-            )
-        except Exception as exc:
-            logger.warning(
-                "%s filtered search failed (%s); retrying unfiltered.",
-                self.agent_name,
-                exc,
-            )
-            raw = self.vectorstore.similarity_search_with_relevance_scores(
-                query=prefixed,
-                k=self.fetch_k,
-            )
-
-        items = self._normalize(raw)
-        items = self._deduplicate(items)
-        items = self._rerank(query, items)
-        return items[: self.final_k]
-
-    def build_filter(
-        self,
-        decision: MasterDecision,
-    ) -> Dict[str, Any]:
-        raise NotImplementedError
-
-    def _normalize(
-        self,
-        raw: List[Any],
-    ) -> List[EvidenceItem]:
-        items: List[EvidenceItem] = []
-
-        for result in raw:
-            if isinstance(result, tuple) and len(result) == 2:
-                document, score = result
-            else:
-                document, score = result, 0.0
-
-            if not isinstance(document, Document):
-                continue
-
-            try:
-                relevance = float(score)
-            except (TypeError, ValueError):
-                relevance = 0.0
-
-            if relevance and relevance < self.score_threshold:
-                continue
-
-            metadata = dict(document.metadata or {})
-            digest_basis = "|".join(
-                [
-                    self.agent_name,
-                    str(metadata.get("title", "")),
-                    str(metadata.get("section", "")),
-                    str(metadata.get("page", "")),
-                    document.page_content[:300],
-                ]
-            )
-            digest = hashlib.sha1(
-                digest_basis.encode("utf-8")
-            ).hexdigest()[:10]
-
-            prefix = {
-                "pakistani_agent": "PK",
-                "islamic_agent": "IS",
-                "procedure_agent": "PR",
-            }[self.agent_name]
-
-            items.append(
-                {
-                    "source_id": f"{prefix}-{digest}",
-                    "agent": self.agent_name,
-                    "content": document.page_content.strip(),
-                    "metadata": metadata,
-                    "retrieval_score": relevance,
-                    "rerank_score": 0.0,
-                }
-            )
-
-        return items
-
-    @staticmethod
-    def _deduplicate(
-        items: List[EvidenceItem],
-    ) -> List[EvidenceItem]:
-        seen: set[str] = set()
-        output: List[EvidenceItem] = []
-
-        for item in items:
-            normalized = re.sub(
-                r"\s+",
-                " ",
-                item["content"],
-            ).strip().lower()
-            key = hashlib.sha1(normalized.encode("utf-8")).hexdigest()
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-            output.append(item)
-
-        return output
-
-    def _rerank(
-        self,
-        query: str,
-        items: List[EvidenceItem],
-    ) -> List[EvidenceItem]:
-        if not items:
-            return []
-
-        try:
-            query_vector = self.embeddings.embed_query(
-                f"query: {query}"
-            )
-            document_vectors = self.embeddings.embed_documents(
-                [
-                    item["content"]
-                    if item["content"].lower().startswith("passage:")
-                    else f"passage: {item['content']}"
-                    for item in items
-                ]
-            )
-
-            for item, vector in zip(items, document_vectors):
-                item["rerank_score"] = float(
-                    sum(a * b for a, b in zip(query_vector, vector))
-                )
-        except Exception as exc:
-            logger.warning(
-                "%s local reranking failed: %s",
-                self.agent_name,
-                exc,
-            )
-            for item in items:
-                item["rerank_score"] = item["retrieval_score"]
-
-        return sorted(
-            items,
-            key=lambda item: (
-                item["rerank_score"],
-                item["retrieval_score"],
-            ),
-            reverse=True,
-        )
-
-
-class PakistaniRetrievalAgent(BaseRetrievalAgent):
-    def build_filter(
-        self,
-        decision: MasterDecision,
-    ) -> Dict[str, Any]:
-        clauses: List[Dict[str, Any]] = [
-            {"legal_system": {"$eq": "Pakistani"}}
-        ]
-
-        if decision.province:
-            clauses.append(
-                {
-                    "$or": [
-                        {"province": {"$eq": decision.province}},
-                        {"jurisdiction": {"$eq": "Pakistan"}},
-                        {"jurisdiction": {"$eq": "Federal"}},
-                    ]
-                }
-            )
-
-        return (
-            clauses[0]
-            if len(clauses) == 1
-            else {"$and": clauses}
-        )
-
-
-class IslamicRetrievalAgent(BaseRetrievalAgent):
-    def build_filter(
-        self,
-        decision: MasterDecision,
-    ) -> Dict[str, Any]:
-        return {"legal_system": {"$eq": "Islamic"}}
-
-
-class ProcedureRetrievalAgent(BaseRetrievalAgent):
-    def build_filter(
-        self,
-        decision: MasterDecision,
-    ) -> Dict[str, Any]:
-        clauses: List[Dict[str, Any]] = [
-            {
-                "content_type": {
-                    "$in": [
-                        "case_law",
-                        "judgment",
-                        "procedure",
-                        "document_checklist",
-                        "official_guideline",
-                    ]
-                }
-            }
-        ]
-
-        if decision.province:
-            clauses.append(
-                {
-                    "$or": [
-                        {"province": {"$eq": decision.province}},
-                        {"jurisdiction": {"$eq": "Pakistan"}},
-                        {"jurisdiction": {"$eq": "Federal"}},
-                    ]
-                }
-            )
-
-        return (
-            clauses[0]
-            if len(clauses) == 1
-            else {"$and": clauses}
-        )
-
-
-# Main service and graph
-
 class RAGService:
-    """
-    Exactly four agents:
-
-    1. master_agent
-       - rewrites the question,
-       - checks semantic answer memory,
-       - validates a possible memory hit,
-       - routes on a miss.
-
-    2. pakistani_agent
-    3. islamic_agent
-    4. procedure_agent
-
-    The aggregator, answer generator, memory response, and memory save nodes
-    are deterministic processing nodes, not agents.
-    """
+    """Master + Pakistani + Islamic agents. Procedure is not an agent."""
 
     _instance: Optional["RAGService"] = None
 
@@ -819,255 +609,167 @@ class RAGService:
     def __init__(self) -> None:
         if self._initialized:
             return
+        backend_root = Path(__file__).resolve().parent.parent
+        load_dotenv(backend_root / ".env")
+        load_dotenv(backend_root / "env")
 
-        load_dotenv()
-        self._validate_environment()
-
-        self.fetch_k = int(os.getenv("RAG_FETCH_K", "8"))
-        self.final_k = int(
-            os.getenv("RAG_FINAL_K_PER_AGENT", "4")
+        self.embedder = BGEEmbedder()
+        self.reranker = BGEReranker()
+        self.client = get_qdrant_client()
+        setup_collection(self.client)
+        self.retriever = HybridRetriever(self.client, self.embedder)
+        self.model = _build_chat_model()
+        logger.info(
+            "LLM provider=%s model=%s",
+            rag_config.LLM_PROVIDER,
+            rag_config.OPENROUTER_MODEL
+            if rag_config.LLM_PROVIDER == "openrouter"
+            else rag_config.GROQ_MODEL,
         )
-        self.max_total_evidence = int(
-            os.getenv("RAG_MAX_TOTAL_EVIDENCE", "10")
-        )
-        self.score_threshold = float(
-            os.getenv("RAG_SCORE_THRESHOLD", "0.20")
-        )
-
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=os.getenv(
-                "EMBEDDING_MODEL",
-                "intfloat/multilingual-e5-large",
-            ),
-            model_kwargs={
-                "device": os.getenv("EMBEDDING_DEVICE", "cpu")
-            },
-            encode_kwargs={
-                "normalize_embeddings": True,
-                "batch_size": int(
-                    os.getenv("EMBEDDING_BATCH_SIZE", "16")
-                ),
-            },
-        )
-
-        self.model = ChatGroq(
-            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-            temperature=float(
-                os.getenv("GROQ_TEMPERATURE", "0.1")
-            ),
-            max_retries=int(
-                os.getenv("GROQ_MAX_RETRIES", "2")
-            ),
-            timeout=float(
-                os.getenv("GROQ_TIMEOUT_SECONDS", "60")
-            ),
-        )
-
-        self.master_model = self.model.with_structured_output(
-            MasterDecision
-        )
-        self.answer_model = self.model.with_structured_output(
-            AnswerPayload
-        )
-
-        self.pc = PineconeClient(
-            api_key=os.environ["PINECONE_API_KEY"]
-        )
-        self.vectorstores = self._build_vectorstores()
-        self.retrieval_agents = self._build_retrieval_agents()
-
+        # Default tool/function structured output. Avoid json_mode for Groq:
+        # Groq requires the word "json" in messages for response_format=json_object,
+        # and gpt-oss may still emit soft key names like "main" which we normalize.
+        self.master_model = self.model.with_structured_output(MasterDecision)
+        self.answer_model = self.model.with_structured_output(AnswerPayload)
         self.memory = SemanticAnswerMemory(
-            pinecone=self.pc,
-            embeddings=self.embeddings,
-            index_name=os.getenv(
-                "PINECONE_MEMORY_INDEX",
-                "property-answer-memory",
-            ),
-            dimension=int(
-                os.getenv("EMBEDDING_DIMENSION", "1024")
-            ),
-            metric=os.getenv("PINECONE_METRIC", "cosine"),
-            cloud=os.getenv("PINECONE_CLOUD", "aws"),
-            region=os.getenv(
-                "PINECONE_REGION",
-                "us-east-1",
-            ),
-            namespace=os.getenv(
-                "PINECONE_MEMORY_NAMESPACE",
-                "answers",
-            ),
-            sqlite_path=os.getenv(
-                "MEMORY_SQLITE_PATH",
-                "./data/property_answer_memory.sqlite3",
-            ),
-            top_k=int(os.getenv("MEMORY_TOP_K", "3")),
-            minimum_similarity=float(
-                os.getenv(
-                    "MEMORY_CANDIDATE_THRESHOLD",
-                    "0.84",
-                )
-            ),
-            auto_create_index=(
-                os.getenv(
-                    "MEMORY_AUTO_CREATE_INDEX",
-                    "true",
-                ).lower()
-                == "true"
-            ),
+            client=self.client,
+            embedder=self.embedder,
+            sqlite_path=rag_config.MEMORY_SQLITE_PATH,
+            top_k=rag_config.MEMORY_TOP_K,
+            minimum_similarity=rag_config.MEMORY_CANDIDATE_THRESHOLD,
         )
-
         self.graph = self._build_graph()
         self._initialized = True
 
     @staticmethod
-    def _validate_environment() -> None:
-        required = [
-            "GROQ_API_KEY",
-            "PINECONE_API_KEY",
-        ]
-        missing = [
-            name for name in required if not os.getenv(name)
-        ]
-        if missing:
-            raise RuntimeError(
-                "Missing environment variables: "
-                + ", ".join(missing)
-            )
+    def _messages_with_json_hint(messages: List[Any]) -> List[Any]:
+        """Groq json_object mode requires the word 'json' somewhere in messages."""
+        hint = (
+            "Return ONLY a valid JSON object that matches the required schema. "
+            "Do not wrap it in markdown."
+        )
+        for message in messages:
+            content = getattr(message, "content", None)
+            if isinstance(content, str) and "json" in content.lower():
+                return messages
+        from langchain_core.messages import SystemMessage
 
-    def _build_vectorstores(
+        return [SystemMessage(content=hint), *messages]
+
+    def _invoke_structured(
         self,
-    ) -> Dict[AgentName, PineconeVectorStore]:
-        text_key = os.getenv("PINECONE_TEXT_KEY", "text")
-        indexes: Dict[AgentName, str] = {
-            "pakistani_agent": os.getenv(
-                "PINECONE_PAKISTANI_INDEX",
-                "pakistani-property-law",
-            ),
-            "islamic_agent": os.getenv(
-                "PINECONE_ISLAMIC_INDEX",
-                "islamic-property-law",
-            ),
-            "procedure_agent": os.getenv(
-                "PINECONE_PROCEDURE_INDEX",
-                "property-case-procedure",
-            ),
-        }
+        model,
+        schema: type[BaseModel],
+        messages: List[Any],
+    ) -> BaseModel:
+        try:
+            result = model.invoke(messages)
+            if isinstance(result, schema):
+                return result
+            return schema.model_validate(result)
+        except Exception as first_exc:
+            recovered = self._parse_failed_generation(first_exc)
+            if recovered is not None:
+                logger.warning(
+                    "Recovered %s from failed structured output: %s",
+                    schema.__name__,
+                    first_exc,
+                )
+                return schema.model_validate(recovered)
 
-        stores: Dict[AgentName, PineconeVectorStore] = {}
+            # Retry once with explicit JSON instruction + json_mode for models
+            # that reject tool schemas but accept json_object.
+            message = str(first_exc).lower()
+            should_retry_json = (
+                "tool call validation failed" in message
+                or "tool_use_failed" in message
+                or "failed_generation" in message
+            )
+            if not should_retry_json:
+                raise
 
-        for agent_name, index_name in indexes.items():
             try:
-                stores[agent_name] = PineconeVectorStore(
-                    index=self.pc.Index(index_name),
-                    embedding=self.embeddings,
-                    text_key=text_key,
-                    namespace=os.getenv(
-                        {
-                            "pakistani_agent":
-                                "PINECONE_PAKISTANI_NAMESPACE",
-                            "islamic_agent":
-                                "PINECONE_ISLAMIC_NAMESPACE",
-                            "procedure_agent":
-                                "PINECONE_PROCEDURE_NAMESPACE",
-                        }[agent_name]
+                json_model = self.model.with_structured_output(schema, method="json_mode")
+            except TypeError as exc:
+                raise first_exc from exc
+
+            try:
+                result = json_model.invoke(self._messages_with_json_hint(messages))
+                if isinstance(result, schema):
+                    return result
+                return schema.model_validate(result)
+            except Exception as second_exc:
+                recovered = self._parse_failed_generation(second_exc)
+                if recovered is not None:
+                    logger.warning(
+                        "Recovered %s from json_mode failure: %s",
+                        schema.__name__,
+                        second_exc,
                     )
-                    or "documents",
-                )
-            except Exception as exc:
-                logger.exception(
-                    "Unable to configure %s index %s: %s",
-                    agent_name,
-                    index_name,
-                    exc,
-                )
+                    return schema.model_validate(recovered)
+                raise second_exc from first_exc
 
-        return stores
+    def _invoke_master_decision(self, messages: List[Any]) -> MasterDecision:
+        return self._invoke_structured(self.master_model, MasterDecision, messages)  # type: ignore[return-value]
 
-    def _build_retrieval_agents(
-        self,
-    ) -> Dict[AgentName, BaseRetrievalAgent]:
-        agents: Dict[AgentName, BaseRetrievalAgent] = {}
+    def _invoke_answer_payload(self, messages: List[Any]) -> AnswerPayload:
+        return self._invoke_structured(self.answer_model, AnswerPayload, messages)  # type: ignore[return-value]
 
-        if "pakistani_agent" in self.vectorstores:
-            agents["pakistani_agent"] = (
-                PakistaniRetrievalAgent(
-                    agent_name="pakistani_agent",
-                    vectorstore=self.vectorstores[
-                        "pakistani_agent"
-                    ],
-                    embeddings=self.embeddings,
-                    fetch_k=self.fetch_k,
-                    final_k=self.final_k,
-                    score_threshold=self.score_threshold,
-                )
-            )
+    @staticmethod
+    def _parse_failed_generation(exc: BaseException) -> Optional[Dict[str, Any]]:
+        text = str(exc)
+        if "failed_generation" not in text:
+            return None
 
-        if "islamic_agent" in self.vectorstores:
-            agents["islamic_agent"] = IslamicRetrievalAgent(
-                agent_name="islamic_agent",
-                vectorstore=self.vectorstores[
-                    "islamic_agent"
-                ],
-                embeddings=self.embeddings,
-                fetch_k=self.fetch_k,
-                final_k=self.final_k,
-                score_threshold=self.score_threshold,
-            )
+        candidates: List[str] = []
+        for pattern in (
+            r"failed_generation['\"]?\s*:\s*'(\{.*\})'\s*([,\}])",
+            r'failed_generation[\'"]?\s*:\s*"(\{.*\})"\s*([,\}])',
+            r"failed_generation['\"]?\s*:\s*(\{.*\})",
+        ):
+            match = re.search(pattern, text, flags=re.DOTALL)
+            if match:
+                candidates.append(match.group(1))
 
-        if "procedure_agent" in self.vectorstores:
-            agents["procedure_agent"] = (
-                ProcedureRetrievalAgent(
-                    agent_name="procedure_agent",
-                    vectorstore=self.vectorstores[
-                        "procedure_agent"
-                    ],
-                    embeddings=self.embeddings,
-                    fetch_k=self.fetch_k,
-                    final_k=self.final_k,
-                    score_threshold=self.score_threshold,
-                )
-            )
+        for raw in candidates:
+            cleaned = raw
+            try:
+                cleaned = bytes(raw, "utf-8").decode("unicode_escape")
+            except Exception:
+                cleaned = raw
+            for blob in (cleaned, raw):
+                try:
+                    payload = json.loads(blob)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    args = payload.get("arguments")
+                    if isinstance(args, dict):
+                        return args
+                    return payload
 
-        return agents
+        args_match = re.search(
+            r'"arguments"\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})',
+            text,
+            flags=re.DOTALL,
+        )
+        if args_match:
+            try:
+                return json.loads(args_match.group(1))
+            except json.JSONDecodeError:
+                return None
+        return None
 
     def _build_graph(self):
         graph = StateGraph(GraphState)
-
-        # Exactly four agent nodes.
         graph.add_node("master_agent", self._master_agent)
-        graph.add_node(
-            "pakistani_agent",
-            self._pakistani_agent,
-        )
-        graph.add_node(
-            "islamic_agent",
-            self._islamic_agent,
-        )
-        graph.add_node(
-            "procedure_agent",
-            self._procedure_agent,
-        )
-
-        # Non-agent processing nodes.
-        graph.add_node(
-            "memory_response",
-            self._memory_response,
-        )
-        graph.add_node(
-            "aggregate_evidence",
-            self._aggregate_evidence,
-        )
-        graph.add_node(
-            "answer_generator",
-            self._answer_generator,
-        )
-        graph.add_node(
-            "save_memory",
-            self._save_memory,
-        )
-
+        graph.add_node("pakistani_agent", self._pakistani_agent)
+        graph.add_node("islamic_agent", self._islamic_agent)
+        graph.add_node("memory_response", self._memory_response)
+        graph.add_node("aggregate_evidence", self._aggregate_evidence)
+        graph.add_node("answer_generator", self._answer_generator)
+        graph.add_node("save_memory", self._save_memory)
         graph.add_edge(START, "master_agent")
-
         graph.add_conditional_edges(
             "master_agent",
             self._route_after_master,
@@ -1075,150 +777,105 @@ class RAGService:
                 "memory_response": "memory_response",
                 "pakistani_agent": "pakistani_agent",
                 "islamic_agent": "islamic_agent",
-                "procedure_agent": "procedure_agent",
                 "aggregate_evidence": "aggregate_evidence",
             },
         )
-
-        graph.add_edge(
-            "pakistani_agent",
-            "aggregate_evidence",
-        )
-        graph.add_edge(
-            "islamic_agent",
-            "aggregate_evidence",
-        )
-        graph.add_edge(
-            "procedure_agent",
-            "aggregate_evidence",
-        )
-
-        graph.add_edge(
-            "aggregate_evidence",
-            "answer_generator",
-        )
-        graph.add_edge(
-            "answer_generator",
-            "save_memory",
-        )
+        graph.add_edge("pakistani_agent", "aggregate_evidence")
+        graph.add_edge("islamic_agent", "aggregate_evidence")
+        graph.add_edge("aggregate_evidence", "answer_generator")
+        graph.add_edge("answer_generator", "save_memory")
         graph.add_edge("save_memory", END)
         graph.add_edge("memory_response", END)
-
         return graph.compile()
 
-    # Master Agent: memory check + routing
-
-    def _master_agent(
-        self,
-        state: GraphState,
-    ) -> Dict[str, Any]:
+    def _master_agent(self, state: GraphState) -> Dict[str, Any]:
         question = state["question"].strip()
-        history = self._format_history(
-            state.get("history", [])
-        )
-        view_mode: ViewMode = state.get(
-            "view_mode",
-            "both",
-        )
-
-        # First perform semantic memory search.
-        memory_candidates = self.memory.search(
-            question=question,
-            view_mode=view_mode,
-        )
-
-        candidate_text = self._format_memory_candidates(
-            memory_candidates
-        )
-
+        history = self._format_history(state.get("history", []))
+        view_mode: ViewMode = state.get("view_mode", "both")
+        memory_candidates = self.memory.search(question=question, view_mode=view_mode)
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", MASTER_SYSTEM_PROMPT),
                 (
                     "human",
-                    "View mode: {view_mode}\n\n"
+                    "Selected dashboard domain (authoritative): {view_mode}\n\n"
                     "Conversation history:\n{history}\n\n"
                     "Latest user question:\n{question}\n\n"
-                    "Semantic memory candidates:\n{candidates}",
+                    "Semantic memory candidates:\n{candidates}\n\n"
+                    "Remember: sub_queries keys must be exactly "
+                    "'pakistani_agent' and/or 'islamic_agent' (never 'main').",
                 ),
             ]
         )
-
-        decision = self.master_model.invoke(
+        decision = self._invoke_master_decision(
             prompt.format_messages(
                 view_mode=view_mode,
                 history=history or "(none)",
                 question=question,
-                candidates=candidate_text or "(none)",
+                candidates=self._format_memory_candidates(memory_candidates) or "(none)",
             )
         )
-
-        valid_candidate_ids = {
-            item["memory_id"]
-            for item in memory_candidates
-        }
-
-        # Never trust an invented memory ID.
-        if (
-            decision.memory_hit
-            and decision.memory_id not in valid_candidate_ids
-        ):
+        valid_ids = {item["memory_id"] for item in memory_candidates}
+        if decision.memory_hit and decision.memory_id not in valid_ids:
             decision.memory_hit = False
             decision.memory_id = None
             decision.memory_reason = (
-                "The proposed memory ID was not present in "
-                "the supplied candidates."
+                "The proposed memory ID was not present in the supplied candidates."
             )
 
-        allowed: set[AgentName]
+        # Prefer retrieval for dashboard domains unless the query is clearly unrelated.
+        if decision.query_class != "GREETING":
+            if _looks_clearly_out_of_domain(question) and not _looks_domain_related(question):
+                decision.query_class = "OUT_OF_DOMAIN"
+                decision.in_scope = False
+            elif decision.query_class in {"OUT_OF_DOMAIN", "AMBIGUOUS"} or not decision.in_scope:
+                if _looks_domain_related(question) or not _looks_clearly_out_of_domain(question):
+                    decision.query_class = "DOMAIN_QUERY"
+                    decision.in_scope = True
+                    decision.routing_reason = (
+                        (decision.routing_reason or "")
+                        + " | Forced in-scope because the question fits the selected legal dashboard."
+                    ).strip(" |")
+
+        # Dashboard selection is authoritative — never switch domains.
         if view_mode == "pakistani":
-            allowed = {"pakistani_agent"}
+            allowed: List[AgentName] = ["pakistani_agent"]
         elif view_mode == "islamic":
-            allowed = {"islamic_agent"}
+            allowed = ["islamic_agent"]
         else:
-            allowed = {"procedure_agent"}
+            allowed = ["pakistani_agent", "islamic_agent"]
 
         if decision.memory_hit:
             decision.selected_agents = []
             decision.sub_queries = {}
+        elif not decision.in_scope or decision.query_class in {
+            "GREETING",
+            "OUT_OF_DOMAIN",
+        }:
+            decision.in_scope = False
+            decision.selected_agents = []
+            decision.sub_queries = {}
         else:
-            decision.selected_agents = [
-                agent
-                for agent in decision.selected_agents
-                if (
-                    agent in allowed
-                    and agent in self.retrieval_agents
-                )
-            ]
-            decision.sub_queries = {
-                agent: query
-                for agent, query in decision.sub_queries.items()
-                if (
-                    agent in decision.selected_agents
-                    and query.strip()
-                )
-            }
+            decision.selected_agents = list(allowed)
+            standalone = (decision.standalone_question or question).strip()
+            decision.sub_queries = _assign_sub_queries(
+                decision.sub_queries or {},
+                allowed,
+                standalone,
+            )
+            decision.routing_reason = (
+                decision.routing_reason
+                or f"Dashboard domain '{view_mode}' requires {', '.join(allowed)}."
+            )
 
-            if (
-                decision.in_scope
-                and not decision.selected_agents
-            ):
-                fallback: List[AgentName]
-                fallback = [{
-                    "pakistani": "pakistani_agent",
-                    "islamic": "islamic_agent",
-                    "procedure": "procedure_agent",
-                }[view_mode]]
-
-                decision.selected_agents = [
-                    agent
-                    for agent in fallback
-                    if agent in self.retrieval_agents
-                ]
-                for agent in decision.selected_agents:
-                    decision.sub_queries[agent] = (
-                        decision.standalone_question
-                    )
+        logger.info(
+            "Master decision view_mode=%s in_scope=%s class=%s agents=%s topic=%s",
+            view_mode,
+            decision.in_scope,
+            decision.query_class,
+            decision.selected_agents,
+            decision.topic,
+        )
 
         return {
             "memory_candidates": memory_candidates,
@@ -1226,58 +883,33 @@ class RAGService:
             "selected_agents": decision.selected_agents,
         }
 
-    def _route_after_master(
-        self,
-        state: GraphState,
-    ) -> List[str]:
-        decision = MasterDecision.model_validate(
-            state["master_decision"]
-        )
-
+    def _route_after_master(self, state: GraphState) -> List[str]:
+        decision = MasterDecision.model_validate(state["master_decision"])
         if decision.memory_hit:
             return ["memory_response"]
-
-        if (
-            not decision.in_scope
-            or not decision.selected_agents
-        ):
+        if not decision.in_scope or not decision.selected_agents:
             return ["aggregate_evidence"]
-
-        # LangGraph fans out to one, two, or all three selected agents.
         return list(decision.selected_agents)
 
-    def _memory_response(
-        self,
-        state: GraphState,
-    ) -> Dict[str, Any]:
-        decision = MasterDecision.model_validate(
-            state["master_decision"]
-        )
-
+    def _memory_response(self, state: GraphState) -> Dict[str, Any]:
+        decision = MasterDecision.model_validate(state["master_decision"])
         if not decision.memory_id:
             return {
                 "answer_payload": AnswerPayload(
-                    direct_answer=(
-                        "The memory candidate could not be loaded."
-                    )
+                    direct_answer="The memory candidate could not be loaded."
                 ).model_dump(),
                 "memory_sources": [],
                 "answer_from_memory": False,
             }
-
         record = self.memory.get(decision.memory_id)
-
         if not record:
             return {
                 "answer_payload": AnswerPayload(
-                    direct_answer=(
-                        "The memory candidate no longer exists."
-                    )
+                    direct_answer="The memory candidate no longer exists."
                 ).model_dump(),
                 "memory_sources": [],
                 "answer_from_memory": False,
             }
-
         return {
             "memory_answer_payload": record["answer_payload"],
             "answer_payload": record["answer_payload"],
@@ -1285,268 +917,289 @@ class RAGService:
             "answer_from_memory": True,
         }
 
-    # Three retrieval agents
-
-    def _pakistani_agent(
-        self,
-        state: GraphState,
-    ) -> Dict[str, Any]:
-        decision = MasterDecision.model_validate(
-            state["master_decision"]
-        )
-        agent = self.retrieval_agents.get(
-            "pakistani_agent"
-        )
-
-        if not agent:
-            return {"pakistani_evidence": []}
-
-        query = decision.sub_queries.get(
-            "pakistani_agent",
-            decision.standalone_question,
-        )
+    def _pakistani_agent(self, state: GraphState) -> Dict[str, Any]:
+        decision = MasterDecision.model_validate(state["master_decision"])
+        query = decision.sub_queries.get("pakistani_agent", decision.standalone_question)
         return {
-            "pakistani_evidence": agent.retrieve(
-                query,
-                decision,
+            "pakistani_evidence": self._retrieve_for_agent(
+                agent_name="pakistani_agent",
+                query=query,
+                legal_system="Pakistani",
+                province=decision.province,
             )
         }
 
-    def _islamic_agent(
-        self,
-        state: GraphState,
-    ) -> Dict[str, Any]:
-        decision = MasterDecision.model_validate(
-            state["master_decision"]
-        )
-        agent = self.retrieval_agents.get(
-            "islamic_agent"
-        )
-
-        if not agent:
-            return {"islamic_evidence": []}
-
-        query = decision.sub_queries.get(
-            "islamic_agent",
-            decision.standalone_question,
-        )
+    def _islamic_agent(self, state: GraphState) -> Dict[str, Any]:
+        decision = MasterDecision.model_validate(state["master_decision"])
+        query = decision.sub_queries.get("islamic_agent", decision.standalone_question)
         return {
-            "islamic_evidence": agent.retrieve(
-                query,
-                decision,
+            "islamic_evidence": self._retrieve_for_agent(
+                agent_name="islamic_agent",
+                query=query,
+                legal_system="Islamic",
+                province=None,
             )
         }
 
-    def _procedure_agent(
+    def _retrieve_for_agent(
         self,
-        state: GraphState,
-    ) -> Dict[str, Any]:
-        decision = MasterDecision.model_validate(
-            state["master_decision"]
+        *,
+        agent_name: AgentName,
+        query: str,
+        legal_system: str,
+        province: Optional[str],
+    ) -> List[EvidenceItem]:
+        if not (query or "").strip():
+            return []
+        hits = self.retriever.retrieve(
+            query,
+            top_k=rag_config.RETRIEVAL_TOP_K,
+            legal_system=legal_system,
+            province=province,
         )
-        agent = self.retrieval_agents.get(
-            "procedure_agent"
-        )
-
-        if not agent:
-            return {"procedure_evidence": []}
-
-        query = decision.sub_queries.get(
-            "procedure_agent",
-            decision.standalone_question,
-        )
-        return {
-            "procedure_evidence": agent.retrieve(
-                query,
-                decision,
+        try:
+            reranked = self.reranker.rerank(query, hits, top_k=rag_config.RERANK_TOP_K)
+        except Exception as exc:
+            logger.warning(
+                "Reranker failed for %s (%s); using retrieval ranking.",
+                agent_name,
+                exc,
             )
-        }
-
-    # Non-agent processing nodes
-
-    def _aggregate_evidence(
-        self,
-        state: GraphState,
-    ) -> Dict[str, Any]:
-        combined = (
-            state.get("pakistani_evidence", [])
-            + state.get("islamic_evidence", [])
-            + state.get("procedure_evidence", [])
+            reranked = [
+                {**hit, "rerank_score": float(hit.get("score") or 0.0)}
+                for hit in hits[: rag_config.RERANK_TOP_K]
+            ]
+        diverse = order_breadth_first(reranked, rag_config.MAX_CHUNKS_PER_DOC)
+        evidence = [self._hit_to_evidence(item, agent_name) for item in diverse]
+        logger.info(
+            "%s retrieved=%s evidence=%s query=%r",
+            agent_name,
+            len(hits),
+            len(evidence),
+            (query or "")[:120],
         )
+        return evidence
 
-        seen: set[str] = set()
-        unique: List[EvidenceItem] = []
-
-        for item in combined:
-            normalized = re.sub(
-                r"\s+",
-                " ",
-                item["content"],
-            ).strip().lower()
-            key = hashlib.sha1(
-                normalized.encode("utf-8")
-            ).hexdigest()
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-            unique.append(item)
-
-        unique.sort(
-            key=lambda item: (
-                item["rerank_score"],
-                item["retrieval_score"],
-            ),
-            reverse=True,
-        )
-
-        return {
-            "merged_evidence":
-                unique[: self.max_total_evidence]
-        }
-
-    def _answer_generator(
-        self,
-        state: GraphState,
-    ) -> Dict[str, Any]:
-        decision = MasterDecision.model_validate(
-            state["master_decision"]
-        )
-
-        if not decision.in_scope:
-            payload = AnswerPayload(
-                direct_answer=(
-                    "This system only handles Pakistani and "
-                    "Islamic property-law questions."
-                )
-            )
-            return {
-                "answer_payload": payload.model_dump(),
-                "answer_from_memory": False,
-            }
-
-        evidence = state.get("merged_evidence", [])
-
-        if not evidence:
-            payload = AnswerPayload(
-                direct_answer=(
-                    "No sufficiently relevant supporting material "
-                    "was found in the configured legal indexes."
-                )
-            )
-            return {
-                "answer_payload": payload.model_dump(),
-                "answer_from_memory": False,
-            }
-
-        prompt = ChatPromptTemplate.from_messages(
+    def _hit_to_evidence(self, hit: Dict[str, Any], agent_name: AgentName) -> EvidenceItem:
+        payload = dict(hit.get("payload") or {})
+        digest_basis = "|".join(
             [
-                ("system", ANSWER_SYSTEM_PROMPT),
-                (
-                    "human",
-                    "Question:\n{question}\n\n"
-                    "Topic: {topic}\n"
-                    "Jurisdiction: {jurisdiction}\n"
-                    "Province: {province}\n"
-                    "Selected agents: {agents}\n\n"
-                    "Evidence:\n{evidence}",
-                ),
+                agent_name,
+                str(hit.get("title") or ""),
+                str(hit.get("section") or ""),
+                str(hit.get("page") or ""),
+                (hit.get("text") or "")[:300],
             ]
         )
-
-        payload = self.answer_model.invoke(
-            prompt.format_messages(
-                question=decision.standalone_question,
-                topic=decision.topic,
-                jurisdiction=(
-                    decision.jurisdiction
-                    or "Not established"
-                ),
-                province=(
-                    decision.province
-                    or "Not established"
-                ),
-                agents=", ".join(
-                    decision.selected_agents
-                ),
-                evidence=self._format_evidence(evidence),
-            )
-        )
-
-        valid_ids = {
-            item["source_id"]
-            for item in evidence
-        }
-        payload.cited_source_ids = [
-            source_id
-            for source_id in payload.cited_source_ids
-            if source_id in valid_ids
-        ]
-
+        digest = hashlib.sha1(digest_basis.encode("utf-8")).hexdigest()[:10]
+        prefix = "PK" if agent_name == "pakistani_agent" else "IS"
         return {
-            "answer_payload": payload.model_dump(),
-            "answer_from_memory": False,
+            "source_id": f"{prefix}-{digest}",
+            "agent": agent_name,
+            "content": (hit.get("text") or "").strip(),
+            "metadata": {
+                **payload,
+                "title": hit.get("title") or payload.get("title", "Unknown"),
+                "section": hit.get("section") or payload.get("section", "N/A"),
+                "page": hit.get("page") or payload.get("page_number", "N/A"),
+                "source_path": hit.get("source_path") or payload.get("source_path", ""),
+                "legal_system": hit.get("legal_system") or payload.get("legal_system", ""),
+            },
+            "retrieval_score": float(hit.get("score") or 0.0),
+            "rerank_score": float(hit.get("rerank_score") or hit.get("score") or 0.0),
+            "doc_id": str(hit.get("doc_id") or payload.get("doc_id") or ""),
         }
 
-    def _save_memory(
-        self,
-        state: GraphState,
-    ) -> Dict[str, Any]:
-        if state.get("answer_from_memory"):
-            return {}
-
-        decision = MasterDecision.model_validate(
-            state["master_decision"]
+    def _aggregate_evidence(self, state: GraphState) -> Dict[str, Any]:
+        combined = list(state.get("pakistani_evidence", []) or []) + list(
+            state.get("islamic_evidence", []) or []
         )
-        payload = state.get("answer_payload")
-        evidence = state.get("merged_evidence", [])
+        seen: set[str] = set()
+        unique: List[EvidenceItem] = []
+        for item in combined:
+            normalized = re.sub(r"\s+", " ", item["content"]).strip().lower()
+            key = hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        unique.sort(key=lambda item: (item["rerank_score"], item["retrieval_score"]), reverse=True)
+        as_dicts = [
+            {
+                **item,
+                "doc_id": item.get("doc_id") or item["metadata"].get("doc_id") or item["source_id"],
+            }
+            for item in unique
+        ]
+        ordered = order_breadth_first(as_dicts, rag_config.MAX_CHUNKS_PER_DOC)
+        return {"merged_evidence": ordered[: rag_config.RAG_MAX_TOTAL_EVIDENCE]}
+
+    def _answer_generator(self, state: GraphState) -> Dict[str, Any]:
+        decision = MasterDecision.model_validate(state["master_decision"])
+        view_mode: ViewMode = state.get("view_mode", "both")
+        question = decision.standalone_question or state.get("question", "")
+
+        if decision.query_class == "GREETING":
+            payload = AnswerPayload(direct_answer="Hello! How can I help you with your legal question?")
+            return {"answer_payload": payload.model_dump(), "answer_from_memory": False}
 
         if (
             not decision.in_scope
-            or not payload
-            or not evidence
-        ):
-            return {}
+            or decision.query_class == "OUT_OF_DOMAIN"
+        ) and _looks_clearly_out_of_domain(question):
+            payload = AnswerPayload(direct_answer="I don't know.")
+            return {"answer_payload": payload.model_dump(), "answer_from_memory": False}
 
-        sources = self._sources_from_evidence(
-            evidence,
-            payload.get("cited_source_ids", []),
+        # If master misfires but the question is legal, continue with domain answer.
+        if not decision.in_scope:
+            decision.in_scope = True
+            decision.query_class = "DOMAIN_QUERY"
+
+        evidence = list(state.get("merged_evidence", []) or [])
+        logger.info(
+            "Answer generator evidence=%s sufficient=%s view_mode=%s",
+            len(evidence),
+            self._evidence_is_sufficient(evidence),
+            view_mode,
         )
+        if self._evidence_is_sufficient(evidence):
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", ANSWER_SYSTEM_PROMPT),
+                    (
+                        "human",
+                        "Selected dashboard domain: {view_mode}\n\n"
+                        "Question:\n{question}\n\n"
+                        "Topic: {topic}\n"
+                        "Jurisdiction: {jurisdiction}\n"
+                        "Province: {province}\n"
+                        "Selected agents: {agents}\n\n"
+                        "Evidence:\n{evidence}",
+                    ),
+                ]
+            )
+            payload = self._invoke_answer_payload(
+                prompt.format_messages(
+                    view_mode=view_mode,
+                    question=decision.standalone_question,
+                    topic=decision.topic,
+                    jurisdiction=decision.jurisdiction or "Not established",
+                    province=decision.province or "Not established",
+                    agents=", ".join(decision.selected_agents),
+                    evidence=self._format_evidence(evidence),
+                )
+            )
+            valid_ids = {item["source_id"] for item in evidence}
+            payload.cited_source_ids = [
+                source_id
+                for source_id in payload.cited_source_ids
+                if source_id in valid_ids
+            ]
+            return {"answer_payload": payload.model_dump(), "answer_from_memory": False}
 
+        # Controlled domain fallback — still answer like the specialized agents.
+        domain_label = {
+            "pakistani": "Pakistani law only",
+            "islamic": "Islamic law / fiqh only",
+            "both": "Pakistani and/or Islamic law only",
+        }.get(view_mode, "Pakistani and/or Islamic law only")
+        weak_evidence = self._format_evidence(evidence) if evidence else "(none)"
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", FALLBACK_SYSTEM_PROMPT),
+                (
+                    "human",
+                    "Selected dashboard domain: {view_mode}\n"
+                    "Allowed scope: {domain_label}\n"
+                    "Selected agents: {agents}\n\n"
+                    "Question:\n{question}\n\n"
+                    "Topic: {topic}\n"
+                    "Jurisdiction: {jurisdiction}\n"
+                    "Province: {province}\n\n"
+                    "Retrieved agent evidence was empty or too weak to ground citations.\n"
+                    "Weak/partial evidence (may be empty):\n{evidence}\n\n"
+                    "Produce a full domain answer in the style of the selected agent(s). "
+                    "Do NOT reply with only 'I don't know.' "
+                    "Fill islamic_analysis when Islamic is selected/both, and "
+                    "pakistani_analysis when Pakistani is selected/both.",
+                ),
+            ]
+        )
+        payload = self._invoke_answer_payload(
+            prompt.format_messages(
+                view_mode=view_mode,
+                domain_label=domain_label,
+                agents=", ".join(decision.selected_agents) or view_mode,
+                question=decision.standalone_question,
+                topic=decision.topic,
+                jurisdiction=decision.jurisdiction or "Not established",
+                province=decision.province or "Not established",
+                evidence=weak_evidence,
+            )
+        )
+        payload.cited_source_ids = []
+        if (payload.direct_answer or "").strip().lower() in {"i don't know.", "i don't know"}:
+            # Hard guard: never return bare refusal for in-domain legal questions.
+            if view_mode == "islamic":
+                payload.direct_answer = (
+                    "I can discuss this under Islamic law/fiqh, but the indexed sources "
+                    "did not return a strong enough excerpt for citation. "
+                    "Please rephrase with more detail (for example: Hudood, zina, "
+                    "qisas, inheritance, or a specific ordinance)."
+                )
+                payload.islamic_analysis = payload.islamic_analysis or payload.direct_answer
+            elif view_mode == "pakistani":
+                payload.direct_answer = (
+                    "I can discuss this under Pakistani law, but the indexed sources "
+                    "did not return a strong enough excerpt for citation. "
+                    "Please rephrase with a statute, section, or concrete legal issue."
+                )
+                payload.pakistani_analysis = payload.pakistani_analysis or payload.direct_answer
+            else:
+                payload.direct_answer = (
+                    "I can discuss this under Pakistani and/or Islamic law, but the "
+                    "indexed sources did not return a strong enough excerpt for citation. "
+                    "Please add more detail about the legal issue."
+                )
+        return {"answer_payload": payload.model_dump(), "answer_from_memory": False}
+
+    @staticmethod
+    def _evidence_is_sufficient(evidence: List[EvidenceItem]) -> bool:
+        if not evidence:
+            return False
+        # BGE reranker scores are often negative logits; do not require score > 0.
+        substantive = [
+            item
+            for item in evidence
+            if len((item.get("content") or "").strip()) >= 40
+        ]
+        return bool(substantive)
+
+    def _save_memory(self, state: GraphState) -> Dict[str, Any]:
+        if state.get("answer_from_memory"):
+            return {}
+        decision = MasterDecision.model_validate(state["master_decision"])
+        payload = state.get("answer_payload")
+        evidence = state.get("merged_evidence", [])
+        if not decision.in_scope or not payload or not evidence:
+            return {}
+        sources = self._sources_from_evidence(evidence, payload.get("cited_source_ids", []))
         try:
             memory_id = self.memory.save(
                 question=state["question"],
-                standalone_question=(
-                    decision.standalone_question
-                ),
+                standalone_question=decision.standalone_question,
                 topic=decision.topic,
-                jurisdiction=(
-                    decision.jurisdiction or ""
-                ),
+                jurisdiction=decision.jurisdiction or "",
                 province=decision.province or "",
-                view_mode=state.get(
-                    "view_mode",
-                    "both",
-                ),
+                view_mode=state.get("view_mode", "both"),
                 selected_agents=decision.selected_agents,
                 answer_payload=payload,
                 sources=sources,
             )
-            logger.info(
-                "Saved answer memory record: %s",
-                memory_id,
-            )
+            logger.info("Saved answer memory record: %s", memory_id)
         except Exception as exc:
-            # Failure to save memory must not destroy the answer.
-            logger.exception(
-                "Unable to save answer memory: %s",
-                exc,
-            )
-
+            logger.exception("Unable to save answer memory: %s", exc)
         return {}
-
-    # Public API
 
     def query(
         self,
@@ -1555,7 +1208,6 @@ class RAGService:
         chat_history: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         question = (question or "").strip()
-
         if not question:
             return {
                 "answer": "Question is required.",
@@ -1564,23 +1216,14 @@ class RAGService:
                 "selected_agents": [],
                 "from_memory": False,
             }
-
-        if view_mode not in {
-            "pakistani",
-            "islamic",
-            "procedure",
-        }:
+        if view_mode not in {"pakistani", "islamic", "both"}:
             return {
-                "answer": (
-                    "view_mode must be 'pakistani', "
-                    "'islamic', or 'procedure'."
-                ),
+                "answer": "view_mode must be 'pakistani', 'islamic', or 'both'.",
                 "success": False,
                 "sources": [],
                 "selected_agents": [],
                 "from_memory": False,
             }
-
         try:
             output: GraphState = self.graph.invoke(
                 {
@@ -1590,15 +1233,9 @@ class RAGService:
                 }
             )
         except Exception as exc:
-            logger.exception(
-                "Property RAG graph failed: %s",
-                exc,
-            )
+            logger.exception("Legal RAG graph failed: %s", exc)
             return {
-                "answer": (
-                    "The property-law retrieval pipeline "
-                    "failed to complete."
-                ),
+                "answer": "The legal retrieval pipeline failed to complete.",
                 "error": str(exc),
                 "success": False,
                 "sources": [],
@@ -1606,13 +1243,8 @@ class RAGService:
                 "from_memory": False,
             }
 
-        payload = AnswerPayload.model_validate(
-            output["answer_payload"]
-        )
-        from_memory = bool(
-            output.get("answer_from_memory", False)
-        )
-
+        payload = AnswerPayload.model_validate(output["answer_payload"])
+        from_memory = bool(output.get("answer_from_memory", False))
         if from_memory:
             sources = output.get("memory_sources", [])
         else:
@@ -1620,110 +1252,61 @@ class RAGService:
                 output.get("merged_evidence", []),
                 payload.cited_source_ids,
             )
-
-        decision = MasterDecision.model_validate(
-            output["master_decision"]
-        )
-
+        decision = MasterDecision.model_validate(output["master_decision"])
         return {
             "answer": payload.direct_answer,
-            "pakistanContent":
-                payload.pakistani_analysis,
-            "islamicContent":
-                payload.islamic_analysis,
-            "procedureContent":
-                payload.procedure_analysis,
-            "practicalSteps":
-                payload.practical_steps,
-            "missingInformation":
-                payload.missing_information,
+            "pakistanContent": payload.pakistani_analysis,
+            "islamicContent": payload.islamic_analysis,
+            "procedureContent": payload.procedure_analysis,
+            "practicalSteps": payload.practical_steps,
+            "missingInformation": payload.missing_information,
             "disclaimer": payload.disclaimer,
             "sources": sources,
-            "selected_agents":
-                output.get("selected_agents", []),
-            "master_decision":
-                output.get("master_decision", {}),
+            "selected_agents": output.get("selected_agents", []),
+            "master_decision": output.get("master_decision", {}),
             "from_memory": from_memory,
-            "memory_id": (
-                decision.memory_id
-                if from_memory
-                else None
-            ),
+            "memory_id": decision.memory_id if from_memory else None,
             "success": True,
         }
 
     def check_connection(self) -> Dict[str, Any]:
-        return {
-            "connected": bool(self.retrieval_agents),
-            "configured_agents": [
-                "master_agent",
-                *self.retrieval_agents.keys(),
-            ],
-            "expected_agents": [
-                "master_agent",
-                "pakistani_agent",
-                "islamic_agent",
-                "procedure_agent",
-            ],
-            "memory_enabled":
-                self.memory.index is not None,
-            "memory_index":
-                self.memory.index_name,
-            "memory_database":
-                str(self.memory._db_path),
-            "graph_nodes": [
-                "master_agent",
-                "pakistani_agent",
-                "islamic_agent",
-                "procedure_agent",
-                "memory_response",
-                "aggregate_evidence",
-                "answer_generator",
-                "save_memory",
-            ],
-        }
+        from .qdrant_setup import check_qdrant_health
 
-    def get_similar_questions(
-        self,
-        question: str,
-        k: int = 3,
-    ) -> List[str]:
-        candidates = self.memory.search(
-            question=question,
-            view_mode="both",
+        health = check_qdrant_health(self.client)
+        health.update(
+            {
+                "configured_agents": ["master_agent", "pakistani_agent", "islamic_agent"],
+                "expected_agents": ["master_agent", "pakistani_agent", "islamic_agent"],
+                "memory_enabled": True,
+                "memory_database": str(self.memory._db_path),
+                "graph_nodes": [
+                    "master_agent",
+                    "pakistani_agent",
+                    "islamic_agent",
+                    "memory_response",
+                    "aggregate_evidence",
+                    "answer_generator",
+                    "save_memory",
+                ],
+            }
         )
-        return [
-            item["standalone_question"]
-            for item in candidates[:k]
-        ]
-
-    # Formatting helpers
+        return health
 
     @staticmethod
-    def _format_history(
-        history: List[Any],
-    ) -> str:
+    def _format_history(history: List[Any]) -> str:
         lines: List[str] = []
-
         for item in history[-8:]:
             if isinstance(item, str):
                 lines.append(item)
             elif isinstance(item, dict):
-                lines.append(
-                    f"{item.get('role', 'unknown')}: "
-                    f"{item.get('content', '')}"
-                )
+                lines.append(f"{item.get('role', 'unknown')}: {item.get('content', '')}")
             else:
                 lines.append(str(item))
-
         return "\n".join(lines)
 
     @staticmethod
-    def _format_memory_candidates(
-        candidates: List[MemoryCandidate],
-    ) -> str:
-        blocks: List[str] = []
-
+    def _format_memory_candidates(candidates: List[MemoryCandidate]) -> str:
+        blocks = []
         for candidate in candidates:
             payload = candidate["answer_payload"]
             blocks.append(
@@ -1732,46 +1315,18 @@ class RAGService:
                         f"Memory ID: {candidate['memory_id']}",
                         f"Similarity: {candidate['similarity_score']:.4f}",
                         f"Question: {candidate['question']}",
-                        (
-                            "Standalone question: "
-                            f"{candidate['standalone_question']}"
-                        ),
+                        f"Standalone question: {candidate['standalone_question']}",
                         f"Topic: {candidate['topic']}",
-                        (
-                            "Jurisdiction: "
-                            f"{candidate['jurisdiction'] or 'Unknown'}"
-                        ),
-                        (
-                            "Province: "
-                            f"{candidate['province'] or 'Unknown'}"
-                        ),
                         f"View mode: {candidate['view_mode']}",
-                        (
-                            "Selected agents: "
-                            + ", ".join(
-                                candidate["selected_agents"]
-                            )
-                        ),
-                        (
-                            "Previous direct answer: "
-                            f"{payload.get('direct_answer', '')}"
-                        ),
-                        (
-                            "Created at: "
-                            f"{candidate['created_at']}"
-                        ),
+                        f"Previous direct answer: {payload.get('direct_answer', '')}",
                     ]
                 )
             )
-
         return "\n\n---\n\n".join(blocks)
 
     @staticmethod
-    def _format_evidence(
-        evidence: List[EvidenceItem],
-    ) -> str:
-        blocks: List[str] = []
-
+    def _format_evidence(evidence: List[EvidenceItem]) -> str:
+        blocks = []
         for item in evidence:
             metadata = item["metadata"]
             blocks.append(
@@ -1779,52 +1334,16 @@ class RAGService:
                     [
                         f"[{item['source_id']}]",
                         f"Agent: {item['agent']}",
-                        (
-                            "Title: "
-                            f"{metadata.get('title', 'Unknown')}"
-                        ),
-                        (
-                            "Document type: "
-                            f"{metadata.get('document_type', metadata.get('content_type', 'Unknown'))}"
-                        ),
-                        (
-                            "Jurisdiction: "
-                            f"{metadata.get('jurisdiction', 'Unknown')}"
-                        ),
-                        (
-                            "Province: "
-                            f"{metadata.get('province', 'N/A')}"
-                        ),
-                        (
-                            "Section: "
-                            f"{metadata.get('section', 'N/A')}"
-                        ),
-                        (
-                            "Page: "
-                            f"{metadata.get('page', 'N/A')}"
-                        ),
-                        (
-                            "Court: "
-                            f"{metadata.get('court', 'N/A')}"
-                        ),
-                        (
-                            "Case number: "
-                            f"{metadata.get('case_number', 'N/A')}"
-                        ),
-                        (
-                            "School: "
-                            f"{metadata.get('school', 'N/A')}"
-                        ),
-                        (
-                            "Source URL: "
-                            f"{metadata.get('source_url', metadata.get('source', 'N/A'))}"
-                        ),
+                        f"Title: {metadata.get('title', 'Unknown')}",
+                        f"Legal system: {metadata.get('legal_system', 'Unknown')}",
+                        f"Section: {metadata.get('section', 'N/A')}",
+                        f"Page: {metadata.get('page', 'N/A')}",
+                        f"Source path: {metadata.get('source_path', 'N/A')}",
                         "Content:",
                         item["content"],
                     ]
                 )
             )
-
         return "\n\n---\n\n".join(blocks)
 
     @staticmethod
@@ -1833,71 +1352,24 @@ class RAGService:
         cited_source_ids: List[str],
     ) -> List[Dict[str, Any]]:
         cited = set(cited_source_ids)
-
-        return [
-            {
-                "source_id": item["source_id"],
-                "agent": item["agent"],
-                "title":
-                    item["metadata"].get(
-                        "title",
-                        "Unknown",
-                    ),
-                "section":
-                    item["metadata"].get(
-                        "section",
-                        "N/A",
-                    ),
-                "page":
-                    item["metadata"].get(
-                        "page",
-                        "N/A",
-                    ),
-                "court":
-                    item["metadata"].get(
-                        "court",
-                        "N/A",
-                    ),
-                "case_number":
-                    item["metadata"].get(
-                        "case_number",
-                        "N/A",
-                    ),
-                "jurisdiction":
-                    item["metadata"].get(
-                        "jurisdiction",
-                        "Unknown",
-                    ),
-                "province":
-                    item["metadata"].get(
-                        "province",
-                        "N/A",
-                    ),
-                "school":
-                    item["metadata"].get(
-                        "school",
-                        "N/A",
-                    ),
-                "source_url":
-                    item["metadata"].get(
-                        "source_url",
-                        item["metadata"].get(
-                            "source",
-                            "",
-                        ),
-                    ),
-                "updated_at":
-                    item["metadata"].get(
-                        "updated_at",
-                        "",
-                    ),
-                "content": item["content"],
-                "retrieval_score":
-                    item["retrieval_score"],
-                "rerank_score":
-                    item["rerank_score"],
-                "cited":
-                    item["source_id"] in cited,
-            }
-            for item in evidence
-        ]
+        sources = []
+        for item in evidence:
+            legal_system = item["metadata"].get("legal_system") or (
+                "Pakistani" if item["agent"] == "pakistani_agent" else "Islamic"
+            )
+            sources.append(
+                {
+                    "source_id": item["source_id"],
+                    "agent": item["agent"],
+                    "law_type": legal_system,
+                    "title": item["metadata"].get("title", "Unknown"),
+                    "section": item["metadata"].get("section", "N/A"),
+                    "page": item["metadata"].get("page", "N/A"),
+                    "source_path": item["metadata"].get("source_path", ""),
+                    "content": item["content"],
+                    "retrieval_score": item["retrieval_score"],
+                    "rerank_score": item["rerank_score"],
+                    "cited": item["source_id"] in cited,
+                }
+            )
+        return sources

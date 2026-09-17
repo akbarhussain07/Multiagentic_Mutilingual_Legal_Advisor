@@ -268,7 +268,7 @@ const activeUsersCount = calculateActiveUsers();
   <div className="panel" style={{ padding: '30px', color:'black'}}>
     <h3>Upload Legal Documents to Vector DB</h3>
     <p>
-      Upload Markdown legal sources to index them in Pinecone.
+      Upload Markdown or PDF legal sources to index them in Qdrant.
     </p>
     
     <div className="upload-section" style={{ marginTop: '20px' }}>
@@ -281,13 +281,13 @@ const activeUsersCount = calculateActiveUsers();
         >
           <option value="Pakistani">Pakistani Law</option>
           <option value="Islamic">Islamic Law</option>
-          <option value="Procedure">Case Law / Procedure</option>
+          <option value="Procedure">Pakistani procedure / case law</option>
         </select>
       </div>
 
       <input 
         type="file" 
-        accept=".md,.markdown"
+        accept=".md,.markdown,.pdf"
         onChange={(e) => setSelectedFile(e.target.files[0])} 
       />
       

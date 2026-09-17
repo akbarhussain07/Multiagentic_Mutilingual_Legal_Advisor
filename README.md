@@ -7,7 +7,7 @@ Legal Advisor is a full-stack, AI-assisted legal information platform focused on
 
 ## Features
 
-- Separate Pakistani, Islamic, and procedural legal views
+- Separate Pakistani and Islamic legal views, plus a Both mode for cross-domain questions
 - Source-grounded answers with citations and practical next steps
 - Multi-agent question routing using LangGraph
 - Semantic answer memory for repeated, materially equivalent questions
@@ -49,10 +49,11 @@ Legal Advisor is a full-stack, AI-assisted legal information platform focused on
 | Authentication | Django token authentication |
 | Application database | PostgreSQL |
 | RAG orchestration | LangChain and LangGraph |
-| LLM | Groq |
-| Embeddings | Hugging Face `intfloat/multilingual-e5-large` |
-| Vector database | Pinecone |
-| Answer memory | SQLite and Pinecone |
+| LLM | Groq `llama-3.3-70b-versatile` |
+| Embeddings | `BAAI/bge-m3` dense + BM25 sparse |
+| Vector database | Qdrant (`legal-advisor`, RRF hybrid) |
+| Reranker | `BAAI/bge-reranker-v2-m3` |
+| Answer memory | SQLite payloads + Qdrant vectors |
 
 ## Project Structure
 
@@ -82,9 +83,9 @@ LegalAdvisor/
 - Node.js 20.19+ (or 22.12+)
 - PostgreSQL
 - A Groq API key
-- A Pinecone API key
+- A running Qdrant instance (`http://localhost:6333` by default)
 
-The first backend run may download the multilingual E5 embedding model, which requires additional time and disk space.
+The first ingest downloads `BAAI/bge-m3` and `BAAI/bge-reranker-v2-m3`, which requires additional time and disk space.
 
 ## Local Setup
 
@@ -130,7 +131,8 @@ Create `backend/.env`:
 
 ```dotenv
 GROQ_API_KEY=your_groq_api_key
-PINECONE_API_KEY=your_pinecone_api_key
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION=legal-advisor
 
 # Optional email configuration for password resets
 EMAIL_HOST_USER=your_email_address
@@ -138,16 +140,14 @@ EMAIL_HOST_PASSWORD=your_email_app_password
 
 # Optional overrides
 GROQ_MODEL=llama-3.3-70b-versatile
-EMBEDDING_MODEL=intfloat/multilingual-e5-large
-EMBEDDING_DIMENSION=1024
+EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_DEVICE=cpu
-
-PINECONE_PAKISTANI_INDEX=pakistani-property-law
-PINECONE_ISLAMIC_INDEX=islamic-property-law
-PINECONE_PROCEDURE_INDEX=property-case-procedure
-PINECONE_PAKISTANI_NAMESPACE=documents
-PINECONE_ISLAMIC_NAMESPACE=documents
-PINECONE_PROCEDURE_NAMESPACE=documents
+RETRIEVAL_TOP_K=40
+RERANK_TOP_K=15
+MAX_CHUNKS_PER_DOC=3
+RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+RERANKER_MAX_LENGTH=1024
+INGESTION_VERSION=legal-ingestion-v2
 ```
 
 Apply migrations and optionally create an administrator:
@@ -160,16 +160,16 @@ python manage.py createsuperuser
 
 ### 4. Index the legal sources
 
-Legal source files are stored as Markdown under:
+Legal source files are stored as Markdown or PDF under:
 
-- `backend/data/pakistani/`
-- `backend/data/islamic/`
-- `backend/data/Procedure/`
+- `backend/data/pakistani/` (Pakistani law; `legal_system=Pakistani`)
+- `backend/data/islamic/` (Islamic law; `legal_system=Islamic`)
+- `backend/data/procedure/` (Pakistani procedure/case material; still `legal_system=Pakistani`)
 
-From `backend/`, ingest all datasets into Pinecone:
+From `backend/`, ingest all datasets into Qdrant (required after this migration; old E5/Pinecone vectors are incompatible):
 
 ```bash
-python -m rag_api.ingestion_service --dataset all
+python -m rag_api.ingestion_service --dataset all --clear-first
 ```
 
 Useful ingestion options:
@@ -185,7 +185,9 @@ python -m rag_api.ingestion_service --dataset all --force
 python -m rag_api.ingestion_service --dataset pakistani
 ```
 
-The configured Pinecone indexes use cosine similarity and must match the embedding dimension (1024 by default). The ingestion command creates missing serverless indexes.
+The Qdrant collection uses cosine dense vectors (1024-d bge-m3) plus BM25 sparse vectors fused with RRF. The ingestion command creates the collection if it is missing.
+
+Old Pinecone/E5 vectors must not be mixed with the new index. Always re-ingest after switching.
 
 ### 5. Start the backend
 
@@ -262,7 +264,7 @@ python manage.py migrate
 | `DELETE` | `/api/history/<session_id>/delete/` | Delete a chat |
 | `GET` | `/api/health/` | Check API and RAG configuration |
 | `POST` | `/api/rate-app/` | Submit a 1–5 rating |
-| `POST` | `/api/upload-doc/` | Upload and index an authenticated Markdown file |
+| `POST` | `/api/upload-doc/` | Upload and index an authenticated Markdown or PDF file |
 | `GET` | `/api/upload-status/<task_id>/` | Poll an ingestion task |
 | `GET` | `/admin/users/` | List users as an administrator |
 
@@ -274,17 +276,19 @@ Authorization: Token <token>
 
 ## How the RAG Pipeline Works
 
-1. The master agent normalizes the question, considers recent chat context, and checks semantic answer memory.
-2. It routes the request to the Pakistani, Islamic, or procedure retrieval agent selected by the user.
-3. The selected agent retrieves and reranks relevant Pinecone passages.
-4. The answer generator produces a direct answer, analysis, practical steps, missing information, and citations.
-5. The response and chat history are stored for the authenticated user; eligible answers may also be reused through semantic memory.
+1. Greetings and small talk are answered directly. They never hit Qdrant.
+2. The master agent normalizes the question, considers recent chat context, and checks semantic answer memory.
+3. It routes to the Pakistani agent, the Islamic agent, or both. There is no Procedure agent; Pakistani procedure is handled by the Pakistani agent.
+4. Each selected agent runs hybrid search (bge-m3 + BM25 + RRF, top 40) with a `legal_system` metadata filter. Language is stored but never used as a retrieval filter.
+5. Candidates are reranked with `bge-reranker-v2-m3` (top 15) and capped at 3 chunks per document.
+6. The Groq answer generator produces a direct answer, analysis, practical steps, missing information, and citations.
+7. Chat history is stored in PostgreSQL; eligible answers may also be reused through Qdrant/SQLite semantic memory.
 
 ## Adding Legal Sources
 
-Add a `.md` or `.markdown` file to the appropriate directory under `backend/data/`, then run the ingestion command for that dataset. Markdown headings and optional front matter are preserved as retrieval metadata.
+Add a `.md`, `.markdown`, or `.pdf` file to the appropriate directory under `backend/data/`, then run the ingestion command for that dataset. Front matter, titles, and sections are stored as Qdrant payload metadata.
 
-Administrators can also upload Markdown documents through the dashboard. Uploaded documents are indexed in a background thread, and the frontend polls the task-status endpoint until processing completes.
+Administrators can also upload Markdown or PDF documents through the dashboard. Uploaded documents are indexed in a background thread, and the frontend polls the task-status endpoint until processing completes.
 
 ## Security Notes
 
